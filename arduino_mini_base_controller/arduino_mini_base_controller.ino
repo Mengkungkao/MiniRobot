@@ -140,7 +140,7 @@ const uint16_t CONTROL_PERIOD_MS = 10;      // 100 Hz motor control
 const uint16_t TELEMETRY_PERIOD_MS = 50;    // 20 Hz telemetry
 const uint16_t COMMAND_WATCHDOG_MS = 500;   // stop if Pi heartbeat disappears
 
-const float WHEEL_DIAMETER_MM = 80.5f;
+const float WHEEL_DIAMETER_MM = 47.0f;
 
 // COMMISSIONING VALUE. Encoder counts this firmware records per full turn of
 // the *wheel* (i.e. after the gearbox), measured per wheel.
@@ -197,7 +197,13 @@ const int8_t MOTOR_DIRECTION_SIGN[MOTOR_COUNT] = {1, 1};
 // and ~400 mm/s at full PWM. They are a starting point, NOT a calibration:
 // brushed gearmotors differ from each other by tens of percent and are
 // direction-asymmetric, which shows up on the robot as driving straight
-// forward but curving in reverse. Replace them with real numbers:
+// forward but curving in reverse. Replace them with real numbers.
+//
+// Easiest: upload arduino_mini_motor_calibration/, send CAL, and paste the four
+// lines it prints back over the four below -- it sweeps both wheels in both
+// directions, fits the lines on-board and checks them with VERIFY.
+//
+// Or sweep from here and fit the points yourself:
 //
 //   SWEEP,1,10,1000       left wheel, forward, PWM steps of 10, 1 s each
 //   SWEEP,1,10,1000,R     left wheel, reverse

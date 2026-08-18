@@ -77,6 +77,10 @@ Odometry follows ROS conventions:
 arduino_mini_base_controller/
   arduino_mini_base_controller.ino    the sketch to upload to the Arduino Uno
                                        (self-contained: no external libraries)
+arduino_mini_motor_calibration/
+  arduino_mini_motor_calibration.ino  bench sketch: measures and fits the
+                                       feed-forward motor constants (section 7)
+  README.md                           full reference for that sketch
 ros2_ws/src/mini_robot/
   mini_robot/serial_bridge.py         Arduino <-> ROS2
   mini_robot/coin_d6_lidar.py         COIN-D6 -> LaserScan
@@ -236,8 +240,46 @@ reverse. The sketch models it as a per-wheel, per-direction straight line
 only corrects the residual. **The values shipped in the sketch are a generic
 guess, not a calibration.**
 
-With the wheels off the floor, connect a plain serial terminal at 500000 baud
-(not the ROS stack) and run:
+### The easy way: the calibration sketch
+
+Upload `arduino_mini_motor_calibration/arduino_mini_motor_calibration.ino`,
+put the robot on blocks so both wheels spin free, open a serial terminal at
+115200 baud and send:
+
+```text
+CAL
+```
+
+It sweeps both wheels in both directions (two passes each, about two and a
+half minutes), fits the line on-board, and prints the four constant lines ready
+to paste over the `FF_SLOPE_*` / `FF_INTERCEPT_*` definitions in
+`arduino_mini_base_controller.ino`:
+
+```text
+const float FF_SLOPE_MM_S_PER_PWM_FWD[MOTOR_COUNT] = {1.8734f, 1.9102f};
+const float FF_INTERCEPT_MM_S_FWD[MOTOR_COUNT] = {-71.20f, -76.85f};
+...
+```
+
+Then send `VERIFY`: it drives a few target speeds through the fresh fit open
+loop and reports the error at each. Under ~10% is good; PID absorbs the rest.
+Send `HELP` for the rest of the commands (`TICKS` for counts-per-rev, `HOLD`
+for a single-point spot check, `RANGE`/`STEP`/`DWELL`/`PASSES` to retune the
+sweep). Any character aborts a running sweep.
+
+Re-flash the main firmware when you are done.
+
+Keep the battery charged for the whole run: the fit is only valid at the bus
+voltage it was measured at.
+
+Full reference, including how to read the fit and what to do when it complains:
+[`arduino_mini_motor_calibration/README.md`](arduino_mini_motor_calibration/README.md).
+
+### The manual way: SWEEP in the main firmware
+
+The main sketch also has a built-in sweep, if you would rather fit the points
+yourself. With the wheels off the floor, connect a plain serial terminal at
+500000 baud (not the ROS stack) and run:
 
 ```text
 SWEEP,1,10,1000
@@ -251,7 +293,7 @@ points at the bottom of each sweep, least-squares fit the rest, and paste the
 slope/intercept into the sketch. A sweep blocks the controller for its whole
 duration (no telemetry, no commands), which is why it is a bench operation.
 
-Also measure, in the same session:
+### Also measure, in the same session
 
 - **`MEASURED_COUNTS_PER_REV`** — send `RESET_ODOM`, rotate one wheel by hand
   exactly one full turn, read that wheel's tick field from telemetry. Do it
