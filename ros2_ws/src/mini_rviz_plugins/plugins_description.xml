@@ -1,0 +1,19 @@
+<library path="mini_rviz_plugins">
+  <class name="mini_rviz_plugins/GotoPanel"
+         type="mini_rviz_plugins::GotoPanel"
+         base_class_type="rviz_common::Panel">
+    <description>
+      Command-line style goto panel: type x_mm,y_mm,heading_deg (e.g.
+      1000,1000,90) and the robot drives there via Nav2 NavigateToPose.
+    </description>
+  </class>
+  <class name="mini_rviz_plugins/TeleopPanel"
+         type="mini_rviz_plugins::TeleopPanel"
+         base_class_type="rviz_common::Panel">
+    <description>
+      Teleop panel with an on/off toggle: while on, hold W/A/S/D (or the
+      on-screen buttons) to stream /cmd_vel_teleop; idle or off gives
+      control back to Nav2 through the cmd_mux.
+    </description>
+  </class>
+</library>

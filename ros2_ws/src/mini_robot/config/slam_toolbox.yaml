@@ -1,0 +1,33 @@
+slam_toolbox:
+  ros__parameters:
+    use_sim_time: false
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_footprint
+    scan_topic: /scan
+    mode: mapping
+    resolution: 0.05
+    max_laser_range: 8.0
+    minimum_time_interval: 0.2
+    transform_publish_period: 0.05
+    # Rotation robustness (2026-07-06): the robot now rotates in place a lot
+    # (rotation shim controller), and a 2D scan taken while spinning is
+    # smeared several degrees. With travel gates of 0.08 (4.6 deg) SLAM added
+    # a misregistered graph node every few degrees of rotation, progressively
+    # twisting the map. Gate on ~29 deg / 15 cm instead so map updates happen
+    # from clean, mostly-stationary or straight-driving scans; odometry
+    # (gyro yaw) bridges the gap mid-rotation.
+    map_update_interval: 5.0
+    minimum_travel_distance: 0.15
+    minimum_travel_heading: 0.5
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 8.0
+    loop_search_maximum_distance: 3.0
+    do_loop_closing: true
+    use_scan_matching: true
+    use_scan_barycenter: true
+    link_match_minimum_response_fine: 0.1
+    link_scan_maximum_distance: 1.5
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1

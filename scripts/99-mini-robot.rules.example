@@ -1,0 +1,26 @@
+# Stable device names for the mini robot's two USB serial adapters.
+#
+# The Arduino Uno clone and the COIN-D6 LiDAR are usually both CH340-based
+# adapters (ID_VENDOR_ID=1a86, ID_MODEL_ID=7523). They share one vendor/product
+# ID and have no serial EEPROM, so `udevadm info -a -n /dev/ttyUSBn | grep
+# '{serial}'` comes back identical for both and cannot tell them apart.
+# Matching on the physical USB port path (ID_PATH) instead, which is stable as
+# long as each adapter stays plugged into the same physical port.
+#
+# Find the values for YOUR Pi, one per device node:
+#   ls -l /dev/serial/by-id/
+#   udevadm info -q property -n /dev/ttyUSB0 | grep ID_PATH=
+#   udevadm info -q property -n /dev/ttyUSB1 | grep ID_PATH=
+#
+# Then replace the two _HERE placeholders below and either re-run
+# `bash scripts/bootstrap_robot_stack.sh pi` (it installs this rule
+# automatically once no placeholder is left) or install it by hand:
+#   sudo cp scripts/99-mini-robot.rules.example /etc/udev/rules.d/99-mini-robot.rules
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+#
+# If your Arduino uses a genuine ATmega16U2 USB interface instead (enumerates
+# as ttyACM*), it does have a unique serial number and you can match on that:
+#   SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", ATTRS{serial}=="YOURSERIAL", SYMLINK+="arduino_mini", MODE="0660", GROUP="dialout"
+SUBSYSTEM=="tty", ENV{ID_PATH}=="ARDUINO_ID_PATH_HERE", SYMLINK+="arduino_mini", MODE="0660", GROUP="dialout"
+SUBSYSTEM=="tty", ENV{ID_PATH}=="LIDAR_ID_PATH_HERE", SYMLINK+="coin_d6", MODE="0660", GROUP="dialout"
