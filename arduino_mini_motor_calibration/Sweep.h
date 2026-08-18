@@ -1,0 +1,14 @@
+#pragma once
+
+#include <Arduino.h>
+
+// Step one wheel across the PWM range in one direction, print every point, and
+// fit the linear model to the points that were actually moving. Stores the
+// result in results[index][FWD|REV].
+//
+// Blocks for roughly passes * steps * (settle + window) milliseconds. Send any
+// character to abort.
+void sweepAndFit(uint8_t index, bool reverse);
+
+// Both directions of one wheel, with a pause between them.
+void calibrateMotor(uint8_t index);

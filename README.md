@@ -74,13 +74,31 @@ Odometry follows ROS conventions:
 ## 3. Folder structure
 
 ```text
-arduino_mini_base_controller/
-  arduino_mini_base_controller.ino    the sketch to upload to the Arduino Uno
-                                       (self-contained: no external libraries)
-arduino_mini_motor_calibration/
-  arduino_mini_motor_calibration.ino  bench sketch: measures and fits the
-                                       feed-forward motor constants (section 7)
-  README.md                           full reference for that sketch
+libraries/MiniRobotBase/src/          shared hardware layer, ONE copy of the
+  MiniRobotPins.h                      pin map and wheel indexing
+  MiniRobotGeometry.h                  wheel size, counts/rev, commissioning signs
+  MiniRobotMotors.h/.cpp               TB6612FNG channels, 31 kHz PWM, STBY
+  MiniRobotEncoders.h/.cpp             quadrature ISRs, atomic tick reads
+arduino_mini_base_controller/          the firmware to upload to the Arduino Uno
+  arduino_mini_base_controller.ino     setup()/loop() and the protocol reference
+  Config.h                             timing, drive limits, feed-forward fit
+  Types.h                              WheelPID (fractional-order PID)
+  Imu.h/.cpp                           MPU/AK8963 driver + Mahony fusion
+  MotorControl.h/.cpp                  kinematics, PID loop, odometry, watchdog
+  Sweep.h/.cpp                         built-in SWEEP calibration command
+  CommandParser.h/.cpp                 serial command set
+  Telemetry.h/.cpp                     the 20 Hz 'T,...' line
+arduino_mini_motor_calibration/        bench sketch: measures and fits the
+  arduino_mini_motor_calibration.ino    feed-forward motor constants (section 7)
+  Config.h                             baud, fit thresholds, sweep settings
+  LinearFit.h                          Welford streaming least-squares
+  FitResults.h/.cpp                    results table + paste-ready constants
+  CalUtil.h/.cpp                       abort handling, one speed measurement
+  Sweep.h/.cpp                         the PWM sweep and the fit
+  Verify.h/.cpp                        open-loop check of the fitted constants
+  Interactive.h/.cpp                   HOLD, TICKS, CONFIG, HELP
+  CommandParser.h/.cpp                 serial command set
+  README.md                            full reference for that sketch
 ros2_ws/src/mini_robot/
   mini_robot/serial_bridge.py         Arduino <-> ROS2
   mini_robot/coin_d6_lidar.py         COIN-D6 -> LaserScan
@@ -303,22 +321,45 @@ duration (no telemetry, no commands), which is why it is a bench operation.
 
 ## 8. Install the Arduino software
 
-The sketch is self-contained: it talks to the TB6612FNG through plain
+The firmware talks to the TB6612FNG through plain
 `digitalWrite`/`analogWrite` and to the IMU through raw I2C registers, so **no
-external libraries are needed**.
+third-party libraries are needed**. It does use one library from this repo,
+`libraries/MiniRobotBase/`, which holds the pin map, wheel geometry and
+commissioning signs so the firmware and the calibration sketch cannot disagree
+about what an encoder tick is worth.
 
-1. Open `arduino_mini_base_controller/arduino_mini_base_controller.ino` in the
-   Arduino IDE.
-2. Select Arduino Uno and upload.
-3. Keep the robot still during startup IMU calibration.
+That library is found automatically once the Arduino sketchbook points at this
+repo, which is a one-time setting:
 
-Verified build size on `arduino:avr:uno` (arduino-cli 1.5.1, AVR core 1.8.8),
-compiled warning-clean with `--warnings all`:
+1. **File > Preferences > Sketchbook location** -> select this repository's root
+   folder (the one containing `libraries/`). Restart the IDE.
+2. Open `arduino_mini_base_controller/arduino_mini_base_controller.ino`.
+3. Select Arduino Uno and upload.
+4. Keep the robot still during startup IMU calibration.
+
+If you would rather not change the sketchbook location, copy
+`libraries/MiniRobotBase/` into your existing sketchbook's `libraries/` folder
+instead -- but then remember to re-copy it whenever you edit the pin map or
+geometry, which is exactly the drift the shared library exists to prevent.
+
+Symptom of a missing library: `MiniRobotPins.h: No such file or directory`.
+
+Verified build size on `arduino:avr:uno` (AVR core 1.8.8, avr-gcc 7.3.0, LTO on
+as the IDE defaults to):
 
 ```text
-Sketch uses 27408 bytes (84%) of program storage space. Maximum is 32256 bytes.
-Global variables use 1086 bytes (53%) of dynamic memory, leaving 962 bytes.
+arduino_mini_base_controller
+  Sketch uses 27398 bytes (84%) of program storage space. Maximum is 32256 bytes.
+  Global variables use 1086 bytes (53%) of dynamic memory, leaving 962 bytes.
+
+arduino_mini_motor_calibration
+  Sketch uses 14312 bytes (44%) of program storage space. Maximum is 32256 bytes.
+  Global variables use 477 bytes (23%) of dynamic memory, leaving 1571 bytes.
 ```
+
+Splitting the firmware into modules cost nothing: it is 10 bytes smaller than
+the single-file version it replaced and uses exactly the same SRAM. The
+calibration sketch grew 120 bytes, which buys it the shared pin map.
 
 Flash is the tight resource, so there is room for small additions but not for
 another large subsystem. If you need more, the cheapest savings are dropping
