@@ -149,6 +149,9 @@ probably too hot.
 | `VERIFY` / `VERIFY,<motor>` | Drive target speeds through the fitted constants and report the open-loop error. |
 | `RESULT` | Reprint the fit table and the paste block. |
 | `HOLD,<motor>,<pwm>[,R]` | Hold one PWM and stream the measured speed (max 20 s). Spot checks, and watching battery sag. |
+| `CHECK` | Pulse each wheel forward for one measurement window and report what its encoder returned: `OK`, `BACKWARDS`, or `NO_ENCODER_MOTION`. Four seconds. **Run this before `CAL`.** |
+| `SIGN` | Print the current commissioning signs for every wheel. |
+| `SIGN,<motor>,<ENC\|MOT>,<1\|-1>` | Set `ENCODER_SIGN` (`ENC`) or `MOTOR_DIRECTION_SIGN` (`MOT`) for **this session only**. Lets you settle a wheel's sign and calibrate in one `CAL` run instead of re-flashing between guesses. The values are printed with the results, ready to paste into `MiniRobotGeometry.h`. |
 | `TICKS[,<seconds>]` | Motors off; stream raw encoder totals. Default 30 s, max 300. |
 | `STEP,<pwm_step>` | Sweep step size, 1–50. Default 10. |
 | `RANGE,<min>,<max>` | Sweep range within 0–210, at least 30 wide. Default 30–210. |
@@ -175,6 +178,8 @@ re-upload.
 | `C,...` | `motor, F\|R, pwm, mm_s, USED\|STALL\|HOLD` — one measured point |
 | `R,...` | `motor, F\|R, slope, intercept, r2, samples, deadzone_pwm, mm_s_at_max_pwm` |
 | `V,...` | `motor, F\|R, target_mm_s, measured_mm_s, error_pct` |
+| `CHECK,...` | `motor, F, pwm, mm_s, OK\|BACKWARDS\|NO_ENCODER_MOTION` |
+| `SIGN,...` | `motor, ENC, sign, MOT, sign` — one row per wheel |
 | `TICKS,...` | `left, right` — raw counts since the command started |
 | `INFO,` / `WARN,` / `ERR,` / `ACK,` | progress, diagnostics, failures, completion |
 
@@ -241,14 +246,52 @@ for a full `CAL`. `CONFIG` prints the estimate.
 | Message or symptom | Cause | Fix |
 | --- | --- | --- |
 | Nothing, or garbage characters | Terminal at the wrong baud | 115200, not 500000 |
-| `ERR,FIT_FAILED,TOO_FEW_MOVING_POINTS` | Wheel never moved: flat battery, `STBY` low, motor or encoder unplugged, wheel jammed | Check power and wiring, confirm the wheel spins free |
+| `ERR,FIT_FAILED,MOTOR_n,used=0,...` + `CAUSE,NO_ENCODER_MOTION` | The wheel may be spinning, but the encoder netted zero counts. Most often channel **B** is floating or on the wrong pin — the ISR then reads a constant B and counts `+1, -1, +1, -1`, netting zero however fast the wheel turns. Also: flat battery, `STBY` low, channel A unplugged, wheel jammed | `CHECK`, then `TICKS,20` and turn that wheel by hand. If the count stays near zero while the other wheel counts cleanly, it is the encoder wiring: left B = `D6`, right B = `D11` |
+| `ERR,FIT_FAILED,MOTOR_n,...` + `CAUSE,WHEEL_MEASURED_BACKWARDS` | Wheel turns opposite to the command, or its encoder reads inverted. Normal on a differential drive, where the right motor is mounted mirrored | `HOLD,<motor>,105` and watch the wheel. Rolls the robot **backward** → the motor is reversed → `SIGN,<motor>,MOT,-1`. Rolls the robot **forward** → the encoder is reversed → `SIGN,<motor>,ENC,-1`. Then `CHECK` again and `CAL`. See the warning below |
+| `ERR,FIT_FAILED,MOTOR_n,...` + `CAUSE,TOO_SLOW_OR_TOO_FEW_POINTS` | The wheel moved, but never above `MIN_VALID_SPEED_MM_S` | Charge the battery, check `STBY`, confirm the wheel spins free |
 | `WARN,WRONG_DIRECTION,...` | Wheel turns opposite to the command, or the encoder reads inverted | Fix `MOTOR_DIRECTION_SIGN` / `ENCODER_SIGN` (here and in the firmware), then re-run |
 | `ERR,FIT_REJECTED,NON_POSITIVE_SLOPE` | More PWM produced less speed — not a motor curve | Check for a slipping coupling, a failing driver channel, or a collapsing battery |
 | `WARN,LOW_R2,<r2>,...` | Noisy or non-linear measurement | Longer `DWELL`, charged battery, check for mechanical binding |
 | `WARN,WHEELS_DIFFER_A_LOT,...` | Left and right slopes differ by more than 25% | Look for drag on the slow wheel; re-check `MEASURED_COUNTS_PER_REV` per wheel |
-| `0.000f /*NOT_CALIBRATED*/` in the paste block | That wheel/direction has no valid fit | Run the missing `SWEEP`. The placeholder is deliberately not a plausible number, so a half-done run fails loudly instead of driving wrong |
+| `0.000f /*NOT_CALIBRATED*/` in the paste block | That wheel/direction has no valid fit — the preceding `WARN,MISSING_FIT` lines name which | Fix the cause the `ERR,FIT_FAILED` line reported, then re-run. **Never paste a block containing `0.000f`** — the firmware treats a non-positive slope as "no feed-forward" and falls back to pure PID, so that wheel will be visibly slow |
 | `VERIFY` errors much larger than 10% | Battery sagged between the sweep and the check, or the fit was made at a different voltage | Recharge and re-run `CAL` |
 | All speeds off by a constant factor | Wrong `MEASURED_COUNTS_PER_REV` | Re-measure with `TICKS` |
+
+### Which sign to flip
+
+`BACKWARDS` has two causes and the log cannot tell them apart — only looking at
+the wheel can:
+
+| `HOLD,<motor>,105` makes the wheel... | Cause | Command |
+| --- | --- | --- |
+| roll the robot **backward** | motor wired/mounted reversed | `SIGN,<motor>,MOT,-1` |
+| roll the robot **forward** | encoder counts inverted | `SIGN,<motor>,ENC,-1` |
+
+Change **one** of them, not both — flipping both cancels out.
+
+Picking the wrong one is worse than leaving the wheel uncalibrated. If the motor
+is genuinely reversed and you flip `ENCODER_SIGN` instead, the fit succeeds, the
+firmware's PID converges, and odometry reports a straight line — while that
+wheel drives backwards and the robot turns on the spot. Nothing in the output
+looks wrong.
+
+`SIGN` is session state. It exists so that one `CAL` run can measure a wheel
+whose sign you worked out thirty seconds earlier, instead of re-flashing between
+guesses. When any sign has been overridden, the result block ends with:
+
+```text
+WARN,MEASURED_WITH_OVERRIDDEN_SIGNS,PASTE_THESE_TOO
+SIGN,1,ENC,1,MOT,1
+SIGN,2,ENC,1,MOT,-1
+INFO,PASTE_INTO_MiniRobotGeometry.h,IN_BOTH_SKETCH_FOLDERS
+// ---------------------------------------------------------
+const int8_t ENCODER_SIGN[MOTOR_COUNT] = {1, 1};
+const int8_t MOTOR_DIRECTION_SIGN[MOTOR_COUNT] = {1, -1};
+// ---------------------------------------------------------
+```
+
+Those two lines and the four `FF_` lines are one package: the fit describes a
+robot wired to those signs, so paste both or neither.
 
 ## 9. How the fit is computed
 

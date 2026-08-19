@@ -2,7 +2,7 @@
 
 #include <math.h>
 
-#include <MiniRobotEncoders.h>
+#include "MiniRobotEncoders.h"
 
 #include "Imu.h"
 
@@ -62,6 +62,14 @@ static float speedFeedForwardPWM(float targetMMs, uint8_t index) {
                               : FF_SLOPE_MM_S_PER_PWM_FWD[index];
   const float intercept = reverse ? FF_INTERCEPT_MM_S_REV[index]
                                   : FF_INTERCEPT_MM_S_FWD[index];
+
+  // A non-positive slope is not a motor curve. The calibration sketch emits
+  // "0.000f /*NOT_CALIBRATED*/" for a wheel whose fit failed, and dividing by
+  // that yields +inf, which constrain() clamps to MAX_DRIVE_PWM -- the wheel
+  // would slam to full duty at any nonzero target. Fall back to pure PID
+  // instead, which is slow and visibly wrong rather than dangerous.
+  if (slope <= 0.0f) return 0.0f;
+
   return constrain((magnitude - intercept) / slope, 0.0f, (float)MAX_DRIVE_PWM);
 }
 
@@ -152,6 +160,13 @@ void updateControl(float dt) {
 
   if (emergencyStopLatched) {
     brakeAllMotors();
+    // Keep draining the encoders while latched. The return below skips the
+    // normal per-wheel read, so without this the ISR counters accumulate every
+    // tick the robot rolls to a halt or is pushed by hand, and the whole
+    // backlog arrives as one 10 ms sample the instant the e-stop clears: a
+    // pose jump the size of however far it moved, plus a huge false velocity
+    // into the PID. Zero speed is also the honest telemetry while braked.
+    resetEncoderDeltas();
     return;
   }
 

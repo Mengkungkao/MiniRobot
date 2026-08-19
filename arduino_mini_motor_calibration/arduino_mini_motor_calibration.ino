@@ -24,10 +24,11 @@
   calibrate, paste the printed constants into the firmware's Config.h, then
   flash the main firmware back.
 
-  The pin map, wheel geometry and commissioning signs are NOT duplicated here.
-  They come from the shared MiniRobotBase library (libraries/MiniRobotBase/),
-  which the firmware uses too, so the two can no longer disagree about what a
-  tick is worth.
+  The pin map, wheel geometry and commissioning signs live in the MiniRobot*
+  files in this folder, which are kept byte-identical to the copies in
+  arduino_mini_base_controller/. The two MUST agree about what a tick is worth:
+  this sketch reports mm/s scaled by those numbers and the firmware consumes the
+  fit scaled by the same numbers. If you edit one copy, copy it to the other.
 
   Sketch layout (the IDE compiles every .cpp/.h in this folder):
     Config.h            baud, fit thresholds, sweep settings
@@ -47,24 +48,52 @@
   2. Use a charged battery, and keep it charged across the whole run. The fit
      is only valid at the bus voltage it was measured at, so a sagging battery
      bakes a wrong slope into the firmware.
-  3. Flash this sketch and open a serial terminal at 115200 baud, line ending
-     "Newline" (carriage return works too).
-  4. Check MEASURED_COUNTS_PER_REV in libraries/MiniRobotBase/src/
-     MiniRobotGeometry.h is right for your encoders. Everything printed here is
+  3. Flash this sketch and open a serial terminal at 115200 baud. Any line
+     ending works -- "Newline", "Carriage return" or "Both NL & CR".
+  4. Check MEASURED_COUNTS_PER_REV in MiniRobotGeometry.h (this folder) is
+     right for your encoders. Everything printed here is
      in mm/s derived from it, so if it is wrong the whole fit is wrong by the
      same factor. Verify with:  TICKS,20
      then turn one wheel by hand exactly one full turn and read the total.
-  5. Run:  CAL
+  5. Run:  CHECK
+     Four seconds. Every wheel must report OK. A wheel that reports
+     NO_ENCODER_MOTION or BACKWARDS cannot be fitted, and CAL will hand back
+     a 0.000f NOT_CALIBRATED placeholder for it instead of a slope.
+
+     BACKWARDS is a sign, not a fault, and it has two causes that look
+     identical from the encoder: the motor spins the wrong way, or the encoder
+     counts the wrong way. Only looking at the wheel separates them. Run
+     HOLD,<motor>,105 and watch which way it rolls:
+
+       rolls the robot BACKWARD -> the motor is reversed -> SIGN,<motor>,MOT,-1
+       rolls the robot FORWARD  -> the encoder is reversed -> SIGN,<motor>,ENC,-1
+
+     SIGN changes the value for this session only, so you can settle both
+     wheels and then measure everything in ONE CAL run instead of re-flashing
+     between guesses. Re-run CHECK until every wheel says OK. Whatever the
+     signs end up as is printed with the results, ready to paste into
+     MiniRobotGeometry.h in BOTH sketch folders.
+
+     Getting this wrong is worse than leaving it: flipping ENCODER_SIGN on a
+     motor that is genuinely reversed makes the fit succeed and the PID agree
+     with itself while the robot turns instead of driving straight.
+  6. Sweep the range you actually drive in. The firmware clamps each wheel to
+     MAX_WHEEL_MM_S, so if CHECK reports (say) 450 mm/s at PWM 105 the robot
+     will never ask for more than about PWM 60, and a 30..210 sweep spends most
+     of its points where the robot never operates. Narrow it:  RANGE,10,80
+  7. Run:  CAL
      A few minutes: both wheels, both directions, two passes each.
-  6. Paste the printed "const float FF_..." block into
+  8. Paste the printed "const float FF_..." block into
      arduino_mini_base_controller/Config.h, replacing the four existing lines.
-  7. Optional but recommended:  VERIFY
+     Never paste a block containing 0.000f -- that wheel has no fit.
+  9. Optional but recommended:  VERIFY
      drives a few target speeds through the freshly fitted feed-forward and
      reports the open-loop error. Under ~10% is a good fit; PID cleans up the
      rest.
 
-  Sending ANY character while a sweep is running aborts it and coasts the
-  motors.
+  Sending any character while a sweep is running aborts it and coasts the
+  motors. Bare line endings do not count, so a terminal that appends CR+LF
+  cannot abort the very run it just started.
 
   COMMANDS
   ------------------------------------------------------------
@@ -75,6 +104,9 @@
     VERIFY,<motor>             ... for one motor
     RESULT                     reprint the last fit table and constants block
     HOLD,<motor>,<pwm>[,R]     hold one PWM and stream the measured speed
+    CHECK                      pulse each wheel, report the encoder sign
+    SIGN                       print the commissioning signs
+    SIGN,<motor>,<ENC|MOT>,<1|-1>  set one for THIS SESSION, no re-flash
     TICKS[,<seconds>]          stream raw encoder counts (counts-per-rev check)
     STEP,<pwm_step>            PWM step size             (default 10)
     RANGE,<min_pwm>,<max_pwm>  PWM sweep range           (default 30..210)
@@ -89,28 +121,32 @@
     C,<motor>,<F|R>,<pwm>,<mm_s>,<USED|STALL>   one measured point
     R,<motor>,<F|R>,<slope>,<intercept>,<r2>,<n>,<deadzone_pwm>,<mm_s_at_max>
     V,<motor>,<F|R>,<target_mm_s>,<measured_mm_s>,<error_pct>
+    CHECK,<motor>,F,<pwm>,<mm_s>,<OK|BACKWARDS|NO_ENCODER_MOTION>
+    SIGN,<motor>,ENC,<sign>,MOT,<sign>
     TICKS,<left>,<right>
     INFO,... / WARN,... / ERR,... / ACK,...
 
   The C rows are plain CSV, so you can also capture them and fit offline if you
   would rather look at the scatter yourself.
 
-  WIRING -- see libraries/MiniRobotBase/src/MiniRobotPins.h, which is the one
-  copy both this sketch and the firmware read. The IMU is not used here and can
-  stay connected or be left off.
+  WIRING -- see MiniRobotPins.h in this folder, which is byte-identical to the
+  firmware's copy. The IMU is not used here and can stay connected or be left
+  off.
 */
 
-#include <MiniRobotEncoders.h>
-#include <MiniRobotMotors.h>
+#include "MiniRobotEncoders.h"
+#include "MiniRobotMotors.h"
 
 #include "CommandParser.h"
 #include "Config.h"
 #include "FitResults.h"
 #include "Interactive.h"
+#include "Signs.h"
 
 void setup() {
   Serial.begin(SERIAL_BAUD);
 
+  signsBegin();      // session copies of ENCODER_SIGN / MOTOR_DIRECTION_SIGN
   motorsBegin();     // outputs, ~31 kHz PWM, STBY high
   encodersBegin();
   resetFitResults();

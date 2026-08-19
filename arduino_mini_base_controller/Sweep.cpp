@@ -1,13 +1,20 @@
 #include "Sweep.h"
 
-#include <MiniRobotEncoders.h>
+#include "MiniRobotEncoders.h"
 
 #include "Config.h"
 #include "MotorControl.h"
 
 void runSweep(uint8_t index, uint8_t step, uint16_t dwellMs, bool reverse) {
+  // A latched e-stop is an explicit operator decision that the robot must not
+  // move. Silently unlatching it here would spin a wheel from a state the
+  // operator believes is safe, so refuse and make them clear it deliberately.
+  if (emergencyStopLatched) {
+    Serial.println(F("ERR,ESTOP_LATCHED"));
+    return;
+  }
+
   stopCommand(false);
-  emergencyStopLatched = false;
 
   Serial.print(F("INFO,SWEEP_START,MOTOR_"));
   Serial.print(index + 1);

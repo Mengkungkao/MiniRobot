@@ -1,5 +1,8 @@
 #include "FitResults.h"
 
+#include "CalUtil.h"
+#include "Signs.h"
+
 FitResult results[MOTOR_COUNT][2];
 
 void resetFitResults() {
@@ -90,14 +93,22 @@ static void printConstantsBlock() {
 
   Serial.println(F("// ---------------------------------------------------------"));
 
+  // Name every missing slot. "WARN,INCOMPLETE" on its own sends the operator
+  // back to scroll through a few hundred lines of sweep output to work out
+  // which wheel and which direction did not produce a line.
   bool complete = true;
   for (uint8_t i = 0; i < MOTOR_COUNT; ++i) {
     for (uint8_t d = 0; d < 2; ++d) {
-      if (!results[i][d].valid) complete = false;
+      if (results[i][d].valid) continue;
+      complete = false;
+      Serial.print(F("WARN,MISSING_FIT,MOTOR_"));
+      printMotorLabel(i);
+      Serial.println(d == REV ? F(",REVERSE") : F(",FORWARD"));
     }
   }
   if (!complete) {
-    Serial.println(F("WARN,INCOMPLETE,RUN_CAL_BEFORE_PASTING"));
+    Serial.println(F("WARN,INCOMPLETE,DO_NOT_PASTE_A_0.000f_SLOPE"));
+    Serial.println(F("INFO,RUN,CHECK,TO_SEE_WHAT_EACH_ENCODER_REPORTS"));
     return;
   }
 
@@ -107,6 +118,15 @@ static void printConstantsBlock() {
   // firmware cannot fix because it would be correcting to a wrong measurement.
   reportSlopeMismatch(FWD, F("FORWARD"));
   reportSlopeMismatch(REV, F("REVERSE"));
+
+  // A fit measured under a session sign override describes a robot that does
+  // not exist yet. Pasting the slopes without the signs gives a wheel that runs
+  // backwards while the PID reports success, so print them together.
+  if (signsOverridden()) {
+    Serial.println();
+    Serial.println(F("WARN,MEASURED_WITH_OVERRIDDEN_SIGNS,PASTE_THESE_TOO"));
+    printSigns();
+  }
 }
 
 void printResultTable() {

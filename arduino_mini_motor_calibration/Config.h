@@ -2,12 +2,13 @@
 
 #include <Arduino.h>
 
-// Pin map, wheel geometry and the commissioning signs come from the shared
-// MiniRobotBase library, so this bench tool measures the robot with exactly the
-// same numbers the firmware drives it with. Everything below is specific to the
-// calibration run itself.
-#include <MiniRobotGeometry.h>
-#include <MiniRobotPins.h>
+// Pin map, wheel geometry and the commissioning signs live in the shared
+// MiniRobot* files, kept byte-identical here and in
+// arduino_mini_base_controller/, so this bench tool measures the robot with
+// exactly the same numbers the firmware drives it with. Everything below is
+// specific to the calibration run itself.
+#include "MiniRobotGeometry.h"
+#include "MiniRobotPins.h"
 
 // A plain terminal baud rate, not the 500000 the ROS bridge uses. Nothing here
 // is parsed by ROS, and 115200 works in every serial monitor.

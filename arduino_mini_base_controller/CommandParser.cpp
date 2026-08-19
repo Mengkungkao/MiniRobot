@@ -146,11 +146,14 @@ static void processCommand(char *line) {
     const int index = motorText ? atoi(motorText) - 1 : -1;
     const int step = stepText ? atoi(stepText) : 10;
     const int dwell = dwellText ? atoi(dwellText) : 1000;
-    if (index >= 0 && index < MOTOR_COUNT && step > 0 && dwell >= 100) {
+    // step is bounded above as well as below: atoi() yields an int, and a
+    // value like 256 truncates to 0 in the uint8_t parameter, which makes the
+    // sweep loop never advance -- an infinite loop with the wheel energised.
+    if (index >= 0 && index < MOTOR_COUNT && step > 0 && step <= 50 && dwell >= 100) {
       runSweep((uint8_t)index, (uint8_t)step, (uint16_t)dwell,
                dirText && (dirText[0] == 'R' || dirText[0] == 'r'));
     } else {
-      Serial.println(F("ERR,SWEEP_FORMAT"));
+      Serial.println(F("ERR,SWEEP_FORMAT,MOTOR_1_2_STEP_1_50_DWELL_MIN_100"));
     }
   }
   else if (strcmp(command, "PING") == 0) {

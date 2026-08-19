@@ -22,10 +22,14 @@
     Regulated Pure Pursuit controller.
 
   Firmware layout (Arduino IDE/arduino-cli compile every .cpp/.h in this
-  folder as one sketch, no separate library needed):
-    Config.h          pin map, geometry, timing and commissioning constants
-    Types.h           TB6612Channel motor driver, WheelPID fractional PID
-    Encoders.h/.cpp    quadrature ISRs and atomic tick reads
+  folder as one sketch, no separate library and no sketchbook setting needed):
+    MiniRobotPins.h       pin map and wheel indexing        } shared, kept
+    MiniRobotGeometry.h   wheel size, counts/rev, signs     } byte-identical
+    MiniRobotMotors.h/.cpp  TB6612FNG channels, 31 kHz PWM  } with
+    MiniRobotEncoders.h/.cpp  quadrature ISRs, atomic reads } the calibration
+                                                           } sketch's copies
+    Config.h          timing, drive limits, feed-forward fit
+    Types.h           WheelPID fractional-order PID
     Imu.h/.cpp         MPU/AK8963 driver + Mahony 6/9-axis sensor fusion
     MotorControl.h/.cpp  drive kinematics, PID loop, odometry, watchdog/e-stop
     Sweep.h/.cpp       blocking open-loop PWM sweep (feed-forward calibration)
@@ -60,7 +64,7 @@
     IMU
     PID,<kp>,<ki>,<kd>[,<lambda>,<mu>]
     PIDM,<motor_1_to_2>,<kp>,<ki>,<kd>[,<lambda>,<mu>]
-    SWEEP,<motor_1_to_2>,<pwm_step>,<dwell_ms>[,R]
+    SWEEP,<motor_1_to_2>,<pwm_step_1_to_50>,<dwell_ms_min_100>[,R]
     PING
 
   Motor numbering: 1 = LEFT (TB6612 channel A), 2 = RIGHT (channel B).

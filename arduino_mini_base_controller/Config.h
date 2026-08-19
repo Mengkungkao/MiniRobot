@@ -3,10 +3,12 @@
 #include <Arduino.h>
 
 // Pin map, wheel geometry and the commissioning signs live in the shared
-// MiniRobotBase library so this sketch and arduino_mini_motor_calibration
-// cannot drift apart. Everything below is specific to the base controller.
-#include <MiniRobotGeometry.h>
-#include <MiniRobotPins.h>
+// MiniRobot* files, which are kept byte-identical in this folder and in
+// arduino_mini_motor_calibration/. Edit one, copy it to the other -- the two
+// sketches MUST agree about what an encoder tick is worth. Everything below is
+// specific to the base controller.
+#include "MiniRobotGeometry.h"
+#include "MiniRobotPins.h"
 
 // -----------------------------------------------------------------------------
 // Timing

@@ -3,11 +3,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <MiniRobotMotors.h>
+#include "MiniRobotMotors.h"
 
 #include "Config.h"
 #include "FitResults.h"
 #include "Interactive.h"
+#include "Signs.h"
 #include "Sweep.h"
 #include "Verify.h"
 
@@ -78,6 +79,36 @@ static void processCommand(char *line) {
     }
     holdAndStream((uint8_t)index, (uint16_t)pwm,
                   dirText && (dirText[0] == 'R' || dirText[0] == 'r'), HOLD_MAX_MS);
+  }
+  else if (strcmp(command, "SIGN") == 0) {
+    char *motorText = strtok_r(NULL, ",", &savePtr);
+    if (!motorText) {          // bare SIGN just reports
+      printSigns();
+      return;
+    }
+    char *whichText = strtok_r(NULL, ",", &savePtr);
+    char *valueText = strtok_r(NULL, ",", &savePtr);
+    const int index = atoi(motorText) - 1;
+    const int value = valueText ? atoi(valueText) : 0;
+    if (index < 0 || index >= MOTOR_COUNT || !whichText || (value != 1 && value != -1)) {
+      Serial.println(F("ERR,SIGN_FORMAT,SIGN,<motor>,<ENC|MOT>,<1|-1>"));
+      return;
+    }
+    for (char *p = whichText; *p; ++p) {
+      if (*p >= 'a' && *p <= 'z') *p = *p - ('a' - 'A');
+    }
+    if (strcmp(whichText, "ENC") == 0) {
+      encoderSign[index] = (int8_t)value;
+    } else if (strcmp(whichText, "MOT") == 0) {
+      motorSign[index] = (int8_t)value;
+    } else {
+      Serial.println(F("ERR,SIGN_FORMAT,SIGN,<motor>,<ENC|MOT>,<1|-1>"));
+      return;
+    }
+    printSigns();
+  }
+  else if (strcmp(command, "CHECK") == 0) {
+    runDirectionCheck();
   }
   else if (strcmp(command, "TICKS") == 0) {
     char *secondsText = strtok_r(NULL, ",", &savePtr);
