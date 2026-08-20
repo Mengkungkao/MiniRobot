@@ -113,12 +113,12 @@ class SerialBridge(Node):
         self.declare_parameter('reconnect_period_s', 2.0)
         self.declare_parameter('max_linear_m_s', 0.25)
         self.declare_parameter('max_angular_rad_s', 2.1)
-        self.declare_parameter('wheel_diameter_m', 0.0805)
+        self.declare_parameter('wheel_diameter_m', 0.047)
         # Must match MEASURED_COUNTS_PER_REV in the sketch. Only affects the
         # /joint_states wheel angles, not odometry (the Arduino integrates
         # that itself), so a wrong value shows up as wheels spinning at the
         # wrong rate in RViz while the robot still drives correctly.
-        self.declare_parameter('counts_per_rev', 720.0)
+        self.declare_parameter('counts_per_rev', 520.0)
         self.declare_parameter('serial_stale_s', 0.5)
 
         self.port = str(self.get_parameter('port').value)

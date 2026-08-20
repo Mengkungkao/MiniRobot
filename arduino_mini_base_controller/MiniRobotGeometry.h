@@ -19,11 +19,15 @@ const float WHEEL_DIAMETER_MM = 47.0f;
 // COMMISSIONING VALUE. Encoder counts recorded per full turn of the *wheel*
 // (i.e. after the gearbox), measured per wheel.
 //
-// Both sketches attach a CHANGE interrupt to channel A only, so they record two
-// counts per encoder cycle (x2 decoding), not one. A "360 PPR" encoder on the
-// output shaft therefore reads 720 counts per wheel revolution, which is the
-// default below. If the encoder sits on the motor shaft instead, the real
-// number is that times the gear ratio and will be in the thousands.
+// The sketches attach a CHANGE interrupt to channel A only, so they record two
+// counts per encoder cycle (x2 decoding), not one.
+//
+// THIS ROBOT: a 13 PPR magnetic encoder on the *motor* shaft, ahead of a 1:20
+// gearbox, so one wheel revolution is
+//     13 PPR x 2 (x2 decoding) x 20 (gear ratio) = 520 counts.
+// Note that an encoder on the motor shaft does not automatically land "in the
+// thousands": a low-PPR magnetic encoder behind a modest reduction can easily
+// read less than an output-shaft optical encoder would.
 //
 // Measure it, do not assume it. Easiest is the calibration sketch:
 //   TICKS,20    then turn one wheel by hand exactly one full turn.
@@ -33,7 +37,7 @@ const float WHEEL_DIAMETER_MM = 47.0f;
 // Per-wheel values (rather than one shared constant) matter because encoder
 // undercount on one side makes its measured speed under-report, which makes
 // PID drive that wheel physically faster than commanded.
-const float MEASURED_COUNTS_PER_REV[MOTOR_COUNT] = {720.0f, 720.0f};
+const float MEASURED_COUNTS_PER_REV[MOTOR_COUNT] = {520.0f, 520.0f};
 
 const float MM_PER_COUNT[MOTOR_COUNT] = {
   (PI * WHEEL_DIAMETER_MM) / MEASURED_COUNTS_PER_REV[0],

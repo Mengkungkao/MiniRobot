@@ -316,8 +316,9 @@ duration (no telemetry, no commands), which is why it is a bench operation.
 
 - **`MEASURED_COUNTS_PER_REV`** — send `RESET_ODOM`, rotate one wheel by hand
   exactly one full turn, read that wheel's tick field from telemetry. Do it
-  per wheel. The default 720 assumes a 360 PPR encoder on the output shaft;
-  an encoder on the motor shaft will read thousands.
+  per wheel. This robot ships `520`: a 13 PPR encoder on the motor shaft,
+  x2 decoding (CHANGE on channel A only), behind a 1:20 gearbox
+  (13 x 2 x 20 = 520). Recompute it for your own encoder and gear ratio.
 - **`TRACK_WIDTH_MM`** — the distance between the two wheel contact patches.
 
 ## 8. Install the Arduino software

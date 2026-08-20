@@ -12,11 +12,11 @@ mini_serial_bridge:
     command_rate_hz: 20.0
     max_linear_m_s: 0.25
     max_angular_rad_s: 2.1
-    wheel_diameter_m: 0.0805
+    wheel_diameter_m: 0.047
     # Must match MEASURED_COUNTS_PER_REV in arduino_mini_base_controller.ino.
     # Only affects the wheel angles in /joint_states (RViz animation), not
     # odometry, which the Arduino integrates itself.
-    counts_per_rev: 720.0
+    counts_per_rev: 520.0
 
 mini_cmd_mux:
   ros__parameters:

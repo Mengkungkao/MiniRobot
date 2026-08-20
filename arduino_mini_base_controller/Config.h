@@ -44,11 +44,16 @@ const float ANGULAR_ACCEL_DEG_S2 = 120.0f;
 // fit (|measured_mm_s| = slope*pwm + intercept), inverted in
 // speedFeedForwardPWM() so PID only has to correct the residual.
 //
-// The defaults below are a generic straight line through a PWM ~40 dead zone
-// and ~400 mm/s at full PWM. They are a starting point, NOT a calibration:
-// brushed gearmotors differ from each other by tens of percent and are
-// direction-asymmetric, which shows up on the robot as driving straight
-// forward but curving in reverse. Replace them with real numbers.
+// PROVENANCE: these came from a sweep taken while MEASURED_COUNTS_PER_REV was
+// still the wrong 720 (the real figure is 520 -- 13 PPR motor-shaft encoder
+// x2 decoding x 1:20 gearbox). Every mm/s in that sweep was therefore scaled
+// by pi*D/720 instead of pi*D/520, so the slopes and intercepts below have
+// been multiplied through by 720/520 = 1.384615 to put them back in true
+// mm/s. That is arithmetic, not measurement: the fit is only as good as the
+// run it came from, and the logged run in
+// arduino_mini_motor_calibration/Calibration_results.md never produced a
+// valid motor 2 fit at all. Re-run CAL and paste a fresh, self-consistent
+// result over these when the bench is set up.
 //
 // Easiest: upload arduino_mini_motor_calibration/, send CAL, and paste the four
 // lines it prints back over the four below -- it sweeps both wheels in both
@@ -64,10 +69,10 @@ const float ANGULAR_ACCEL_DEG_S2 = 120.0f;
 // Each step prints "C,<motor>,<F|R>,<pwm>,<measured_mm_s>". Drop the stalled
 // points at the bottom of the sweep, least-squares fit the rest, and paste the
 // slope/intercept here.
-const float FF_SLOPE_MM_S_PER_PWM_FWD[MOTOR_COUNT] = {4.4255f, 4.4347f};
-const float FF_INTERCEPT_MM_S_FWD[MOTOR_COUNT] = {-24.01f, -30.09f};
-const float FF_SLOPE_MM_S_PER_PWM_REV[MOTOR_COUNT] = {4.6175f, 4.4922f};
-const float FF_INTERCEPT_MM_S_REV[MOTOR_COUNT] = {-27.29f, -30.62f};
+const float FF_SLOPE_MM_S_PER_PWM_FWD[MOTOR_COUNT] = {6.1276f, 6.1404f};
+const float FF_INTERCEPT_MM_S_FWD[MOTOR_COUNT] = {-33.24f, -41.66f};
+const float FF_SLOPE_MM_S_PER_PWM_REV[MOTOR_COUNT] = {6.3935f, 6.2200f};
+const float FF_INTERCEPT_MM_S_REV[MOTOR_COUNT] = {-37.79f, -42.40f};
 
 // Lowest PWM the SWEEP calibration command starts from.
 const uint8_t SWEEP_MIN_PWM = 30;

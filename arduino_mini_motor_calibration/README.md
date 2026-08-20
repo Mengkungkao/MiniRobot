@@ -59,7 +59,7 @@ numbers you paste back will not mean what the firmware thinks they mean:
 | Constant | Default | Why it matters here |
 | --- | --- | --- |
 | `WHEEL_DIAMETER_MM` | `47.0` | converts encoder counts to mm |
-| `MEASURED_COUNTS_PER_REV` | `{720, 720}` | scales every speed in the fit |
+| `MEASURED_COUNTS_PER_REV` | `{520, 520}` | scales every speed in the fit |
 | `MAX_DRIVE_PWM` | `210` | the fit must span the range the firmware uses |
 | `ENCODER_SIGN` | `{1, 1}` | forward must read positive |
 | `MOTOR_DIRECTION_SIGN` | `{1, 1}` | flips a wheel wired backwards |
@@ -89,10 +89,10 @@ INFO,ESTIMATED_SECONDS,per_direction=38,full_CAL=152
 exactly one full turn and read the running total. Do it per wheel. Put the
 magnitudes in `MEASURED_COUNTS_PER_REV` here **and** in the main firmware.
 
-The default 720 assumes a 360 PPR encoder on the output shaft (channel A is
-decoded on CHANGE, so two counts per encoder cycle). An encoder on the motor
-shaft reads that times the gear ratio — thousands. Get this wrong and every
-speed in the fit is wrong by the same factor.
+The shipped 520 is this robot's hardware: a 13 PPR encoder on the motor shaft,
+decoded x2 (channel A on CHANGE, so two counts per encoder cycle), behind a
+1:20 gearbox — 13 x 2 x 20 = 520. Recompute it for your own encoder and gear
+ratio. Get this wrong and every speed in the fit is wrong by the same factor.
 
 **3. Calibrate.** Send `CAL`. It sweeps both wheels, both directions, and takes
 about two and a half minutes at the default settings. Points stream as they are

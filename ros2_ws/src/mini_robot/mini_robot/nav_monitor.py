@@ -25,7 +25,7 @@ from rclpy.time import Time
 from sensor_msgs.msg import JointState, LaserScan
 from tf2_ros import Buffer, TransformListener
 
-WHEEL_RADIUS_M = 0.04025
+WHEEL_RADIUS_M = 0.0235
 
 STATUS_NAMES = {
     GoalStatus.STATUS_UNKNOWN: 'unknown', GoalStatus.STATUS_ACCEPTED: 'accepted',
