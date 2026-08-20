@@ -124,6 +124,9 @@ scripts/
   bootstrap_robot_stack.sh            one-shot installer (desktop or pi mode)
   verify_robot_stack.sh               checks the stack is wired up correctly
   ros_network_env.sh                  source this to set ROS2 DDS network env vars
+  detect_serial_ports.sh              works out which USB adapter is the Arduino
+                                        and which is the LiDAR, then writes and
+                                        installs the udev rules for both
   99-mini-robot.rules.example         udev rules template for stable serial ports
 ```
 
@@ -406,6 +409,36 @@ Log out and back in afterwards so the `dialout` group change takes effect.
 fail the whole `colcon build`.
 
 ## 10. Stable Arduino and LiDAR port names
+
+### The easy way: let the script work it out
+
+With both devices plugged in, and `robot.launch.py` not running:
+
+```bash
+bash scripts/detect_serial_ports.sh --install
+```
+
+It opens each `/dev/ttyUSB*` in turn and classifies it by what it transmits,
+because that is the only thing that separates two CH340s. The Arduino announces
+itself in ASCII (`READY,`, `INFO,`, `T,`) at 500000 baud, or 115200 if one of
+the calibration sketches is loaded; the COIN-D6 emits `0xAA 0x55` framed binary
+at 230400. It then writes `scripts/99-mini-robot.rules` matching each device on
+its `ID_PATH` — or on its USB serial number, if the adapter actually has one —
+installs it, reloads udev, and confirms both symlinks appeared.
+
+Nothing is written to either port unless you pass `--wake-lidar`, so the LiDAR
+motor is never commanded to spin. Opening a port does toggle DTR and reset the
+Arduino, which is harmless on a bench but means you should not run this while
+the robot is driving. `--dry-run` reports what it found and writes nothing.
+
+`bootstrap_robot_stack.sh pi` runs it automatically when both devices are
+present and no rules file exists yet, so on a fresh Pi there is usually nothing
+to do by hand.
+
+The generated file encodes which physical USB socket each adapter sits in, so
+it is machine-specific and gitignored rather than shared between robots.
+
+### The manual way
 
 Inspect serial device identities (which port is Arduino vs. LiDAR depends on
 the USB-serial chip on your Arduino clone — boards with a CH340 adapter

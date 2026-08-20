@@ -5,3 +5,7 @@ __pycache__/
 ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
+
+# Generated per-machine by scripts/detect_serial_ports.sh (USB topology
+# differs between robots, so this must not be shared).
+scripts/99-mini-robot.rules

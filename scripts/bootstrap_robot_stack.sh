@@ -147,15 +147,33 @@ if [ -f "/opt/ros/${ROS_DISTRO}/setup.bash" ]; then
 fi
 
 if [ "$MODE" = "pi" ]; then
-  if grep -q "_HERE" "$REPO_ROOT/scripts/99-mini-robot.rules.example"; then
-    echo "Skipping udev rule install: scripts/99-mini-robot.rules.example still has"
-    echo "  ARDUINO_ID_PATH_HERE / LIDAR_ID_PATH_HERE placeholders. Find the real values"
-    echo "  with 'udevadm info -q property -n /dev/ttyUSB0 | grep ID_PATH=' (repeat for"
-    echo "  each node), edit the file, then re-run this script."
-  else
-    sudo install -m 0644 "$REPO_ROOT/scripts/99-mini-robot.rules.example" /etc/udev/rules.d/99-mini-robot.rules
+  GENERATED_RULES="$REPO_ROOT/scripts/99-mini-robot.rules"
+
+  # Prefer auto-detected rules. detect_serial_ports.sh identifies each adapter
+  # by what it transmits, which is the only thing that separates two CH340s.
+  # Its output is per-machine, so it is generated here rather than tracked.
+  if [ ! -f "$GENERATED_RULES" ] && ls /dev/ttyUSB* /dev/ttyACM* >/dev/null 2>&1; then
+    echo "Detecting which serial adapter is the Arduino and which is the LiDAR..."
+    bash "$REPO_ROOT/scripts/detect_serial_ports.sh" \
+      || echo "Detection failed; falling back to the checked-in rules file." >&2
+  fi
+
+  RULES_SRC=""
+  if [ -f "$GENERATED_RULES" ]; then
+    RULES_SRC="$GENERATED_RULES"
+  elif ! grep -q "_HERE" "$REPO_ROOT/scripts/99-mini-robot.rules.example"; then
+    RULES_SRC="$REPO_ROOT/scripts/99-mini-robot.rules.example"
+  fi
+
+  if [ -n "$RULES_SRC" ]; then
+    sudo install -m 0644 "$RULES_SRC" /etc/udev/rules.d/99-mini-robot.rules
     sudo udevadm control --reload-rules >/dev/null 2>&1 || true
-    sudo udevadm trigger >/dev/null 2>&1 || true
+    sudo udevadm trigger --subsystem-match=tty >/dev/null 2>&1 || true
+    echo "Installed udev rules from $(basename "$RULES_SRC")"
+  else
+    echo "Skipping udev rule install: no usable rules file yet."
+    echo "  Plug in both the Arduino and the LiDAR, then run:"
+    echo "    bash scripts/detect_serial_ports.sh --install"
   fi
 fi
 
