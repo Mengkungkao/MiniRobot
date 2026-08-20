@@ -310,5 +310,5 @@ robot wired to those signs, so paste both or neither.
   measuring at the default 490 Hz would produce a fit the firmware could not
   use.
 
-Build footprint on an Uno: about 14 KB flash (43%) and 477 bytes of static RAM
-(23%).
+Build footprint on an Uno: about 17 KB flash (54%) and 497 bytes of static RAM
+(24%).

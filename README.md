@@ -89,8 +89,10 @@ arduino_mini_base_controller/          the firmware to upload to the Arduino Uno
   Telemetry.h/.cpp                     the 20 Hz 'T,...' line
 arduino_mini_motor_calibration/        bench sketch: measures and fits the
   arduino_mini_motor_calibration.ino    feed-forward motor constants (section 7)
-  MiniRobot*.h/.cpp                    byte-identical copies of the four
+  MiniRobot*.h/.cpp                    byte-identical copies of the six
                                          shared-layer files above
+  Signs.h/.cpp                         ENCODER_SIGN / MOTOR_DIRECTION_SIGN
+                                         overrides for a wheel wired backwards
   Config.h                             baud, fit thresholds, sweep settings
   LinearFit.h                          Welford streaming least-squares
   FitResults.h/.cpp                    results table + paste-ready constants
@@ -98,6 +100,24 @@ arduino_mini_motor_calibration/        bench sketch: measures and fits the
   Sweep.h/.cpp                         the PWM sweep and the fit
   Verify.h/.cpp                        open-loop check of the fitted constants
   Interactive.h/.cpp                   HOLD, TICKS, CONFIG, HELP
+  CommandParser.h/.cpp                 serial command set
+  README.md                            full reference for that sketch
+  Calibration_results.md               log of a past CAL run
+arduino_mini_imu_calibration/          bench sketch: measures the IMU constants
+  arduino_mini_imu_calibration.ino      the firmware cannot measure itself
+                                         (section 6)
+  MiniRobot{Pins,Geometry,Motors}      four of the six shared-layer files; the
+                                         encoders are not used here
+  Config.h                             sample counts, thresholds, limits
+  Stats.h                              Welford streaming mean/variance
+  ImuDriver.h/.cpp                     detection, register setup, scaled reads
+  GyroCal.h/.cpp                       zero-rate offset, noise, drift
+  AccelCal.h/.cpp                      six-face bias and scale
+  MagCal.h/.cpp                        hard and soft iron
+  MotorNoise.h/.cpp                    what the wheels do to the magnetometer
+  CalUtil.h/.cpp                       abort handling, prompts, stillness
+  Interactive.h/.cpp                   CHECK, YAWSIGN, LIVE, RAW, CONFIG, HELP
+  Results.h/.cpp                       results table + paste-ready constants
   CommandParser.h/.cpp                 serial command set
   README.md                            full reference for that sketch
 ros2_ws/src/mini_robot/
@@ -252,7 +272,33 @@ ros2 service call /base/disable_magnetometer std_srvs/srv/Trigger {}
 ```
 
 The `magOffset*` / `magScale*` constants in the sketch are hard/soft iron
-corrections, left at 0/1 until you run a figure-of-eight calibration.
+corrections, and ship at 0/1 -- i.e. uncalibrated.
+
+### Measuring the IMU constants
+
+`arduino_mini_imu_calibration/` is a bench sketch that measures the four things
+the firmware cannot measure about itself: the gyro zero-rate offset and drift,
+the accelerometer bias and scale (which the firmware applies none of, even
+though the accelerometer is the Mahony filter's only gravity reference), the
+hard/soft iron correction above, and `IMU_YAW_SIGN`. Upload it, open a serial
+terminal at **115200 baud**, and send `CAL`:
+
+```text
+CAL
+```
+
+It walks through a health check, the gyro, six accelerometer faces, the yaw
+sign and a figure-of-eight magnetometer sweep, then prints every constant ready
+to paste. About ten minutes, most of it spent moving the robot around.
+
+Send `MOTORS` (robot on blocks) before ever enabling nine-axis fusion: it spins
+the wheels and reports how far the measured field moves with motor current. If
+that is more than a few degrees, the magnetometer calibration is correct and
+still unusable -- heading would become a function of throttle. Leave `MAG`
+fusion off.
+
+Full reference:
+[`arduino_mini_imu_calibration/README.md`](arduino_mini_imu_calibration/README.md).
 
 ## 7. Motor calibration (do this before driving on the floor)
 
@@ -337,44 +383,62 @@ repo either. Each sketch folder is self-contained:
 
 No sketchbook setting, no library install, no symlink.
 
-The price of that is four files kept in two places. The shared hardware layer
--- `MiniRobotPins.h`, `MiniRobotGeometry.h`, `MiniRobotMotors.h/.cpp`,
-`MiniRobotEncoders.h/.cpp` -- exists as a byte-identical copy in each sketch
-folder. **They must stay identical.** The calibration sketch reports mm/s scaled
-by `MEASURED_COUNTS_PER_REV` and the firmware consumes the fit scaled by the
-same constant, so a mismatch silently bakes a constant error into every speed
-the robot drives. After editing either copy:
+The price of that is one shared hardware layer kept in three places:
+
+| File | base_controller | motor_calibration | imu_calibration |
+| --- | :---: | :---: | :---: |
+| `MiniRobotPins.h` | yes | yes | yes |
+| `MiniRobotGeometry.h` | yes | yes | yes |
+| `MiniRobotMotors.h/.cpp` | yes | yes | yes |
+| `MiniRobotEncoders.h/.cpp` | yes | yes | -- (unused) |
+
+Every copy that exists **must stay byte-identical**. The motor calibration
+sketch reports mm/s scaled by `WHEEL_DIAMETER_MM` and `MEASURED_COUNTS_PER_REV`
+and the firmware consumes the fit scaled by the same constants, so a mismatch
+silently bakes a constant error into every speed the robot drives. After
+editing any copy, push it out and check:
 
 ```bash
+cp arduino_mini_base_controller/MiniRobot{Pins,Geometry}.h \
+   arduino_mini_base_controller/MiniRobotMotors.{h,cpp} \
+   arduino_mini_imu_calibration/
 cp arduino_mini_base_controller/MiniRobot*.h \
    arduino_mini_base_controller/MiniRobot*.cpp \
    arduino_mini_motor_calibration/
-diff <(cat arduino_mini_base_controller/MiniRobot*) \
-     <(cat arduino_mini_motor_calibration/MiniRobot*) && echo "in sync"
+
+for f in MiniRobotPins.h MiniRobotGeometry.h MiniRobotMotors.h \
+         MiniRobotMotors.cpp MiniRobotEncoders.h MiniRobotEncoders.cpp; do
+  for d in arduino_mini_motor_calibration arduino_mini_imu_calibration; do
+    [ -f "$d/$f" ] || continue
+    cmp -s "arduino_mini_base_controller/$f" "$d/$f" \
+      && echo "OK   $d/$f" || echo "DIFF $d/$f"
+  done
+done
 ```
 
 Verified build size on `arduino:avr:uno` (AVR core 1.8.8, avr-gcc 7.3.0, LTO on
 as the IDE defaults to):
 
-```text
-arduino_mini_base_controller
-  Sketch uses 27538 bytes (85%) of program storage space. Maximum is 32256 bytes.
-  Global variables use 1086 bytes (53%) of dynamic memory, leaving 962 bytes.
-
-arduino_mini_motor_calibration
-  Sketch uses 14310 bytes (44%) of program storage space. Maximum is 32256 bytes.
-  Global variables use 477 bytes (23%) of dynamic memory, leaving 1571 bytes.
-```
+| Sketch | Flash (of 32256) | SRAM (of 2048) |
+| --- | --- | --- |
+| `arduino_mini_base_controller` | 27554 B (85%) | 1102 B (54%) |
+| `arduino_mini_motor_calibration` | 17292 B (54%) | 497 B (24%) |
+| `arduino_mini_imu_calibration` | 30326 B (94%) | 791 B (39%) |
 
 Splitting the firmware into modules cost nothing in SRAM. Duplicating the shared
 layer per sketch costs nothing either: `const` file-scope data has internal
 linkage, so the compiler folds the scalars and drops whatever a sketch does not
 use.
 
-Flash is the tight resource, so there is room for small additions but not for
-another large subsystem. If you need more, the cheapest savings are dropping
-the `SWEEP` calibration command once the feed-forward fit is measured, and the
-nine-axis Mahony path if you never enable the magnetometer.
+Flash is the tight resource. The base controller has about 4.7 KB spare -- room
+for small additions but not for another large subsystem; the cheapest savings
+are dropping the `SWEEP` command once the feed-forward fit is measured, and the
+nine-axis Mahony path if you never enable the magnetometer. The IMU calibration
+sketch has under 2 KB spare and is essentially at its final size: if you need to
+extend it, `RAW` and `MOTORS` are the two commands nothing else depends on.
+
+Only one sketch is on the board at a time, so these do not compete -- but each
+must fit on its own.
 
 If no IMU is detected at boot the sketch latches the emergency stop and reports
 `ERR,NO_IMU_DETECTED`. That is deliberate: without a heading source, odometry
@@ -734,6 +798,35 @@ Arduino does not store or solve map waypoints.
 
 ## 19. Required commissioning checks
 
+Most of what follows is automated by `scripts/validate_motor_control.py`, which
+talks the Arduino protocol directly -- not through `/cmd_vel` -- so a fault in
+the bridge or the mux cannot be mistaken for a fault in the firmware. Run the
+bench tests first, with the robot on blocks:
+
+```bash
+python3 scripts/validate_motor_control.py --port /dev/arduino_mini
+```
+
+That covers the link, both commissioning signs, closed-loop tracking from 50 to
+250 mm/s, the command watchdog and the e-stop, and it re-fits the feed-forward
+line from the PWM the loop actually settled on so a stale `FF_*` in `Config.h`
+shows up as a number instead of a hunch. Then the two that need floor space and
+a tape measure:
+
+```bash
+python3 scripts/validate_motor_control.py --tests floor --distance-mm 1000
+```
+
+Every failure prints the constant to change and its corrected value.
+
+`--selftest` runs the same control law offline against a model of the motor,
+with no hardware attached, and prints what each failure mode does to the robot's
+real speed. Worth reading once: it shows that a wrong
+`MEASURED_COUNTS_PER_REV` makes the robot outrun its command while telemetry,
+`/odom` and RViz all still read exactly the commanded speed. That error is
+invisible from inside the robot, which is why the distance check below is not
+optional.
+
 ### Encoder direction
 
 Command slow forward motion. Both wheel speed values in Arduino telemetry must
@@ -838,6 +931,72 @@ Re-running the bootstrap script fixes this automatically: it moves the stale
 directory aside to `mini_robot.stale-backup.<timestamp>`, symlinks the correct
 path back to this repo, and rebuilds. Delete the `.stale-backup.*` directory
 once you have confirmed the robot still works.
+
+### `ros2: command not found`
+
+The ROS 2 environment is added to `~/.bashrc` by `bootstrap_robot_stack.sh`, so
+a shell that was already open when the script ran does not have it. Either open
+a new shell or re-read it:
+
+```bash
+source ~/.bashrc
+```
+
+If a *new* shell still cannot find `ros2`, check that the block is actually
+there (`grep -n "mini ROS 2 environment" ~/.bashrc`) and that
+`~/ros2_ws/install/setup.bash` exists -- the bootstrap only writes the block
+once, so a run that failed before the build leaves nothing to source.
+
+Note that this only ever works for **interactive** shells. Ubuntu's stock
+`~/.bashrc` starts with
+
+```bash
+case $- in
+    *i*) ;;
+      *) return;;
+esac
+```
+
+and the ROS block is appended at the end, so it is never reached by anything
+non-interactive: `ssh pi 'ros2 topic list'`, cron jobs, and systemd units all
+land on that early `return`. Those must source ROS explicitly:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/ros2_ws/install/setup.bash
+```
+
+which is exactly what `scripts/ros_network_env.sh` does. A systemd unit that
+starts `robot.launch.py` at boot needs those two lines in a wrapper script, not
+a dependency on `~/.bashrc`.
+
+### The workstation cannot see the robot's topics
+
+Almost always a `ROS_DOMAIN_ID` mismatch. Check on both machines:
+
+```bash
+echo "$ROS_DOMAIN_ID / $ROS_LOCALHOST_ONLY"
+```
+
+Both must print the same domain (this project uses `31`) and `0`. Two traps:
+
+- If `~/.bashrc` already exported a `ROS_DOMAIN_ID` for some *other* project,
+  `bootstrap_robot_stack.sh` inherits it (`ROS_DOMAIN="${ROS_DOMAIN_ID:-31}"`)
+  and writes that value into the block it appends. Force it:
+  `ROS_DOMAIN_ID=31 bash scripts/bootstrap_robot_stack.sh desktop`.
+- Whichever ROS block sits *last* in `~/.bashrc` wins.
+
+To confirm the network path itself, publish from the Pi and watch from the
+workstation:
+
+```bash
+# Pi
+ros2 topic pub -r 5 /probe std_msgs/msg/String "{data: hello}"
+# workstation
+ros2 topic echo /probe --once
+```
+
+If that works, DDS and the firewall are fine and the problem is upstream.
 
 ### Motors hum but do not turn
 

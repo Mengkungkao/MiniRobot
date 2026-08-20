@@ -203,7 +203,15 @@ void updateControl(float dt) {
     const float feedForward = speedFeedForwardPWM(wheelTargetMMs[i], i);
     const float correction = wheelPID[i].update(wheelTargetMMs[i], wheelMeasuredMMs[i], dt);
     float outputMagnitude = feedForward + ((wheelTargetMMs[i] >= 0.0f) ? correction : -correction);
-    outputMagnitude = constrain(outputMagnitude, 0.0f, 255.0f);
+    // MAX_DRIVE_PWM, not 255. The feed-forward term is already clamped there,
+    // but the PID correction is added on top, so the sum could reach full duty
+    // -- past the top of the range the calibration sweep ever measured, where
+    // no fit describes the motor and nothing has ever been checked. Capping the
+    // sum keeps the whole loop inside the range it was characterised over, and
+    // bounds how fast a wheel can run away if its feedback is wrong (a flipped
+    // ENCODER_SIGN makes the error grow instead of shrink, which drives the
+    // correction straight into this ceiling).
+    outputMagnitude = constrain(outputMagnitude, 0.0f, (float)MAX_DRIVE_PWM);
     applyMotorOutput(i, (wheelTargetMMs[i] >= 0.0f) ? outputMagnitude : -outputMagnitude);
   }
 
