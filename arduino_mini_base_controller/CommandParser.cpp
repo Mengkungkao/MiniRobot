@@ -9,7 +9,7 @@
 #include "MotorControl.h"
 #include "Sweep.h"
 
-static char commandBuffer[96];
+static char commandBuffer[COMMAND_BUFFER_SIZE];
 static uint8_t commandLength = 0;
 
 // Report the constants this binary was compiled with.
@@ -78,19 +78,19 @@ static void processCommand(char *line) {
   }
   else if (strcmp(command, "FORWARD") == 0) {
     char *value = strtok_r(NULL, ",", &savePtr);
-    if (!emergencyStopLatched) setVelocityCommand(value ? fabs(atof(value)) : 150.0f, 0.0f);
+    if (!emergencyStopLatched) setVelocityCommand(value ? fabs(atof(value)) : DEFAULT_TEST_LINEAR_MM_S, 0.0f);
   }
   else if (strcmp(command, "REVERSE") == 0) {
     char *value = strtok_r(NULL, ",", &savePtr);
-    if (!emergencyStopLatched) setVelocityCommand(-(value ? fabs(atof(value)) : 150.0f), 0.0f);
+    if (!emergencyStopLatched) setVelocityCommand(-(value ? fabs(atof(value)) : DEFAULT_TEST_LINEAR_MM_S), 0.0f);
   }
   else if (strcmp(command, "LEFT") == 0) {
     char *value = strtok_r(NULL, ",", &savePtr);
-    if (!emergencyStopLatched) setVelocityCommand(0.0f, value ? fabs(atof(value)) : 30.0f);
+    if (!emergencyStopLatched) setVelocityCommand(0.0f, value ? fabs(atof(value)) : DEFAULT_TEST_ANGULAR_DEG_S);
   }
   else if (strcmp(command, "RIGHT") == 0) {
     char *value = strtok_r(NULL, ",", &savePtr);
-    if (!emergencyStopLatched) setVelocityCommand(0.0f, -(value ? fabs(atof(value)) : 30.0f));
+    if (!emergencyStopLatched) setVelocityCommand(0.0f, -(value ? fabs(atof(value)) : DEFAULT_TEST_ANGULAR_DEG_S));
   }
   else if (strcmp(command, "STOP") == 0) {
     stopCommand(false);
@@ -186,12 +186,13 @@ static void processCommand(char *line) {
     char *dwellText = strtok_r(NULL, ",", &savePtr);
     char *dirText = strtok_r(NULL, ",", &savePtr);
     const int index = motorText ? atoi(motorText) - 1 : -1;
-    const int step = stepText ? atoi(stepText) : 10;
-    const int dwell = dwellText ? atoi(dwellText) : 1000;
+    const int step = stepText ? atoi(stepText) : SWEEP_DEFAULT_STEP;
+    const int dwell = dwellText ? atoi(dwellText) : SWEEP_DEFAULT_DWELL_MS;
     // step is bounded above as well as below: atoi() yields an int, and a
     // value like 256 truncates to 0 in the uint8_t parameter, which makes the
     // sweep loop never advance -- an infinite loop with the wheel energised.
-    if (index >= 0 && index < MOTOR_COUNT && step > 0 && step <= 50 && dwell >= 100) {
+    if (index >= 0 && index < MOTOR_COUNT && step > 0 && step <= SWEEP_MAX_STEP &&
+        dwell >= SWEEP_MIN_DWELL_MS) {
       runSweep((uint8_t)index, (uint8_t)step, (uint16_t)dwell,
                dirText && (dirText[0] == 'R' || dirText[0] == 'r'));
     } else {

@@ -55,7 +55,7 @@ static float moveToward(float current, float target, float maximumStep) {
 // visibly outrunning the other during slow turns.
 static float speedFeedForwardPWM(float targetMMs, uint8_t index) {
   const float magnitude = fabs(targetMMs);
-  if (magnitude < 1.0f) return 0.0f;
+  if (magnitude < MIN_WHEEL_SPEED_MM_S) return 0.0f;
 
   const bool reverse = targetMMs < 0.0f;
   const float slope = reverse ? FF_SLOPE_MM_S_PER_PWM_REV[index]
@@ -77,7 +77,8 @@ static float speedFeedForwardPWM(float targetMMs, uint8_t index) {
 // the wheel target), magnitude sets duty. Near-zero target or output coasts the
 // wheel instead of stalling it at a tiny PWM.
 static void applyMotorOutput(uint8_t index, float signedPWM) {
-  if (fabs(wheelTargetMMs[index]) < 1.0f || fabs(signedPWM) < 1.0f) {
+  if (fabs(wheelTargetMMs[index]) < MIN_WHEEL_SPEED_MM_S ||
+      fabs(signedPWM) < MIN_WHEEL_SPEED_MM_S) {
     motor[index].coast();
     wheelPWM[index] = 0.0f;
     return;
@@ -192,7 +193,7 @@ void updateControl(float dt) {
 
     // Low-pass encoder speed while preserving signed direction.
     const float rawSpeedMMs = wheelDistanceMM[i] / dt;
-    wheelFilteredMMs[i] += 0.35f * (rawSpeedMMs - wheelFilteredMMs[i]);
+    wheelFilteredMMs[i] += WHEEL_SPEED_FILTER_ALPHA * (rawSpeedMMs - wheelFilteredMMs[i]);
     wheelMeasuredMMs[i] = wheelFilteredMMs[i];
 
     wheelTargetMMs[i] = constrain(sideTarget[i], -MAX_WHEEL_MM_S, MAX_WHEEL_MM_S);
@@ -228,10 +229,9 @@ void motorControlBegin() {
   motorsBegin();   // outputs, ~31 kHz PWM, STBY high
   encodersBegin();
 
-  // Starting gains, identical for both wheels: each wheel gets the same speed
-  // target for straight motion, and its own PID output corrects the mismatch.
-  // Retune after the SWEEP calibration has replaced the feed-forward fit.
+  // Boot gains from Config.h; PID / PIDM replace them at runtime.
   for (uint8_t i = 0; i < MOTOR_COUNT; ++i) {
-    wheelPID[i].configure(0.30f, 0.020f, 0.0030f, 1.0f, 1.0f);
+    wheelPID[i].configure(WHEEL_PID_KP, WHEEL_PID_KI, WHEEL_PID_KD,
+                          WHEEL_PID_LAMBDA, WHEEL_PID_MU);
   }
 }

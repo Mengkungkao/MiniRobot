@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <math.h>
 
+#include "Config.h"
+
 // The TB6612FNG channel driver lives in the shared MiniRobotBase library
 // (MiniRobotMotors.h). Only the controller-specific PID is defined here.
 
@@ -71,7 +73,7 @@ struct WheelPID {
     if (dt <= 0.0f) return 0.0f;
 
     // Clear accumulated state when stopped or when wheel direction changes.
-    if (fabs(target) < 1.0f || (target * previousTarget < 0.0f)) {
+    if (fabs(target) < MIN_WHEEL_SPEED_MM_S || (target * previousTarget < 0.0f)) {
       reset();
     }
     previousTarget = target;
@@ -83,15 +85,13 @@ struct WheelPID {
 
     integral += shapedError(lambda) * dt;
     // Anti-windup: cap the integral by its output contribution (ki*integral,
-    // in PWM), not a fixed error-seconds bound. A fixed bound leaves only a
-    // couple of PWM counts of trim at realistic ki values, so feed-forward
-    // error can never be integrated away and wheels plateau off-target.
-    const float MAX_INTEGRAL_PWM = 80.0f;
+    // in PWM), not a fixed error-seconds bound. See MAX_INTEGRAL_PWM in
+    // Config.h for why.
     if (ki > 0.0001f) {
       const float limit = MAX_INTEGRAL_PWM / ki;
       integral = constrain(integral, -limit, limit);
     } else {
-      integral = constrain(integral, -500.0f, 500.0f);
+      integral = constrain(integral, -INTEGRAL_FALLBACK_LIMIT, INTEGRAL_FALLBACK_LIMIT);
     }
 
     const float shapedForDerivative = shapedError(mu);

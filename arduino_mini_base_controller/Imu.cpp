@@ -37,15 +37,10 @@ static const float ACCEL_SCALE = 16384.0f;
 static const float GYRO_SCALE = 131.0f;
 static const float MAG_SCALE = 4912.0f / 32760.0f;
 
-// Magnetic declination for true north. Only applied when magnetometer fusion
-// is actually running, and even then it washes out of odometry because the
-// heading is zeroed at startup.
-static const float MAG_DECLINATION_DEG = 12.0f;
-
-// Mahony filter gains. Higher KP corrects faster but tracks accelerometer
-// noise; KI removes gyro bias but destabilises the filter if pushed too high.
-static const float MAHONY_KP = 2.0f;
-static const float MAHONY_KI = 0.02f;
+// MAG_DECLINATION_DEG, MAHONY_KP and MAHONY_KI now live in Config.h with every
+// other tunable. ACCEL_SCALE / GYRO_SCALE / MAG_SCALE stay here: they are not
+// choices, they follow from the range registers written in imuBegin() and
+// changing one without the other would silently rescale every reading.
 
 // Magnetometer fusion is OFF by default. On a small robot the AK8963 sits
 // centimetres from two brushed motors and a battery, so the field it measures
@@ -68,10 +63,9 @@ static float magX = 0.0f, magY = 0.0f, magZ = 0.0f;
 
 static float gyroOffsetX = 0.0f, gyroOffsetY = 0.0f, gyroOffsetZ = 0.0f;
 
-// Magnetometer hard-iron offsets (uT) and soft-iron scale correction. Leave at
-// 0/1 until you have run a figure-of-eight calibration.
-static float magOffsetX = 0.0f, magOffsetY = 0.0f, magOffsetZ = 0.0f;
-static float magScaleX = 1.0f, magScaleY = 1.0f, magScaleZ = 1.0f;
+// Hard-iron offsets and soft-iron scale come from MAG_OFFSET_UT /
+// MAG_SCALE_CORRECTION in Config.h, where the IMU calibration sketch's output
+// is pasted.
 
 // Factory sensitivity adjustment burned into the AK8963's fuse ROM.
 static float magAdjX = 1.0f, magAdjY = 1.0f, magAdjZ = 1.0f;
@@ -225,16 +219,16 @@ static bool readMagnetometer() {
   const int16_t rawMy = ((int16_t)data[3] << 8) | data[2];
   const int16_t rawMz = ((int16_t)data[5] << 8) | data[4];
 
-  magX = ((float)rawMx * MAG_SCALE * magAdjX - magOffsetX) * magScaleX;
-  magY = ((float)rawMy * MAG_SCALE * magAdjY - magOffsetY) * magScaleY;
-  magZ = ((float)rawMz * MAG_SCALE * magAdjZ - magOffsetZ) * magScaleZ;
+  magX = ((float)rawMx * MAG_SCALE * magAdjX - MAG_OFFSET_UT[0]) * MAG_SCALE_CORRECTION[0];
+  magY = ((float)rawMy * MAG_SCALE * magAdjY - MAG_OFFSET_UT[1]) * MAG_SCALE_CORRECTION[1];
+  magZ = ((float)rawMz * MAG_SCALE * magAdjZ - MAG_OFFSET_UT[2]) * MAG_SCALE_CORRECTION[2];
   return true;
 }
 
 // Average several hundred stationary samples to get the gyro's zero-rate
 // offset. The robot must be completely still while this runs.
 void calibrateGyro() {
-  const int samples = 500;
+  const int samples = GYRO_CAL_SAMPLES;
   float sumX = 0.0f, sumY = 0.0f, sumZ = 0.0f;
 
   for (int i = 0; i < samples; ++i) {

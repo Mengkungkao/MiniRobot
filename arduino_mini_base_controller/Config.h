@@ -114,3 +114,108 @@ const uint8_t SWEEP_MIN_PWM = 10;
 // (REP-103, CCW-positive). Rotate the robot left by hand and watch the yaw
 // field in telemetry; if it decreases, set this to -1.0f.
 const float IMU_YAW_SIGN = 1.0f;
+
+// Mahony complementary-filter gains. Higher KP corrects the gyro against
+// gravity faster but tracks accelerometer noise with it; KI removes gyro bias
+// but destabilises the filter if pushed too high.
+const float MAHONY_KP = 2.0f;
+const float MAHONY_KI = 0.02f;
+
+// COMMISSIONING VALUE. Magnetic declination for true north at your location.
+// Only applied when magnetometer fusion is actually running, and even then it
+// washes out of odometry because the heading is zeroed at startup.
+const float MAG_DECLINATION_DEG = 12.0f;
+
+// Samples averaged by CAL_IMU to find the gyro zero-rate offset. The robot must
+// be completely still for all of them; more samples is a longer stillness
+// requirement, not a free improvement.
+const uint16_t GYRO_CAL_SAMPLES = 500;
+
+// COMMISSIONING VALUES. Magnetometer hard-iron offsets (uT) and soft-iron scale
+// correction, in X, Y, Z order. 0/1 means uncalibrated, which is what ships.
+// arduino_mini_imu_calibration/ measures these and prints them ready to paste;
+// they only matter once magnetometer fusion is switched on with MAG,1.
+const float MAG_OFFSET_UT[3] = {0.0f, 0.0f, 0.0f};
+const float MAG_SCALE_CORRECTION[3] = {1.0f, 1.0f, 1.0f};
+
+// -----------------------------------------------------------------------------
+// Wheel speed loop
+// -----------------------------------------------------------------------------
+//
+// Starting gains, identical for both wheels: each wheel gets the same speed
+// target for straight motion and its own PID corrects the mismatch. Retune
+// after a SWEEP calibration has replaced the feed-forward fit above -- the PID
+// only has to handle the residual, so a good fit means small gains.
+//
+// Changeable at runtime with PID / PIDM without reflashing; these are only the
+// values the board boots with. lambda and mu are the fractional orders of the
+// integral and derivative (see Types.h); at 1.0 the loop is classic PID and
+// takes a fast path that skips the Grunwald-Letnikov shaping entirely.
+const float WHEEL_PID_KP = 0.30f;
+const float WHEEL_PID_KI = 0.020f;
+const float WHEEL_PID_KD = 0.0030f;
+const float WHEEL_PID_LAMBDA = 1.0f;
+const float WHEEL_PID_MU = 1.0f;
+
+// Anti-windup, expressed as the largest PWM the integral term is allowed to
+// contribute rather than as a bound on error-seconds. A fixed error-seconds
+// bound leaves only a couple of PWM counts of trim at realistic ki values, so
+// feed-forward error can never be integrated away and the wheels plateau
+// off-target. This is the headroom the loop has to cover a wrong feed-forward:
+// if a wheel needs more than this much correction, fix the fit, not this.
+const float MAX_INTEGRAL_PWM = 80.0f;
+
+// Fallback bound on the raw integral when ki is effectively zero and the PWM
+// limit above cannot be divided out.
+const float INTEGRAL_FALLBACK_LIMIT = 500.0f;
+
+// Single-pole low-pass on the encoder speed estimate, applied per control tick:
+// filtered += alpha * (raw - filtered). Encoder speed over a 10 ms window is
+// quantised and noisy, and the derivative term amplifies exactly that. Higher
+// alpha tracks faster and passes more noise; 0.35 settles in roughly three
+// ticks (~30 ms).
+const float WHEEL_SPEED_FILTER_ALPHA = 0.35f;
+
+// Speeds below this count as stopped. A wheel commanded slower than this coasts
+// rather than being held at a tiny PWM that only heats the bridge, and the
+// feed-forward returns zero rather than inverting its fit near the origin where
+// no fit is valid.
+const float MIN_WHEEL_SPEED_MM_S = 1.0f;
+
+// -----------------------------------------------------------------------------
+// Control loop timing guards
+// -----------------------------------------------------------------------------
+
+// The measured tick interval is clamped to this range before it reaches the
+// PID. A scheduling hiccup that stretches one cycle would otherwise divide a
+// normal tick count by a large dt (a false speed drop) and multiply the
+// derivative by a small one (a spike straight into the output).
+const float CONTROL_DT_MIN_S = 0.005f;
+const float CONTROL_DT_MAX_S = 0.050f;
+
+// Settling time after the motor driver is powered up and before the IMU is
+// probed, so the I2C bus is quiet for detection.
+const uint16_t IMU_STARTUP_SETTLE_MS = 200;
+
+// -----------------------------------------------------------------------------
+// Serial command defaults
+// -----------------------------------------------------------------------------
+
+// Speeds used by the bare FORWARD / REVERSE / LEFT / RIGHT test aliases when no
+// value is given. Deliberately below the limits above: an alias typed at a
+// terminal should move the robot noticeably, not run it at full speed.
+const float DEFAULT_TEST_LINEAR_MM_S = 100.0f;
+const float DEFAULT_TEST_ANGULAR_DEG_S = 30.0f;
+
+// Longest command line accepted. Anything longer is discarded with
+// ERR,COMMAND_TOO_LONG rather than silently truncated into a different command.
+const uint8_t COMMAND_BUFFER_SIZE = 96;
+
+// Defaults and accepted bounds for the SWEEP command. The step ceiling matters:
+// atoi() yields an int and a value like 256 truncates to 0 in the uint8_t
+// parameter, which makes the sweep loop never advance -- an infinite loop with
+// the wheel energised.
+const uint8_t SWEEP_DEFAULT_STEP = 10;
+const uint16_t SWEEP_DEFAULT_DWELL_MS = 1000;
+const uint8_t SWEEP_MAX_STEP = 50;
+const uint16_t SWEEP_MIN_DWELL_MS = 100;

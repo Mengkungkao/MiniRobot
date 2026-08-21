@@ -130,7 +130,7 @@ void setup() {
 
   motorControlBegin();
 
-  delay(200);
+  delay(IMU_STARTUP_SETTLE_MS);
   if (!imuBegin()) {
     // Without a heading source the robot must not drive: odometry would
     // integrate every movement along a heading stuck at zero, so the map and
@@ -160,7 +160,7 @@ void loop() {
     // integrator or derivative.
     float dt = (now - lastControlMs) * 0.001f;
     lastControlMs = now;
-    dt = constrain(dt, 0.005f, 0.050f);
+    dt = constrain(dt, CONTROL_DT_MIN_S, CONTROL_DT_MAX_S);
 
     if (mpuFound) updateIMU();
     updateControl(dt);
