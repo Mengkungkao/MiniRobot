@@ -72,7 +72,7 @@ const uint8_t MAX_DRIVE_PWM = 210;
 // on the spot -- right wheel turning backwards while telemetry reads a healthy
 // positive -- then the encoder was the inverted one instead: set this to
 // {1, -1} and MOTOR_DIRECTION_SIGN back to {1, 1}. Never both.
-const int8_t ENCODER_SIGN[MOTOR_COUNT] = {1, 1};
+const int8_t ENCODER_SIGN[MOTOR_COUNT] = {1, -1};
 
 // COMMISSIONING VALUE. If a wheel physically spins backwards when the firmware
 // asks for forward, flip its sign here rather than swapping the motor leads.
