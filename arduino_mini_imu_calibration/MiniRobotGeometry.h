@@ -52,27 +52,24 @@ const uint8_t MAX_DRIVE_PWM = 210;
 // both wheels. If one wheel reports negative while driving forward, flip its
 // sign here rather than swapping the encoder wires.
 //
-// Left at {1, 1} deliberately. The right wheel's backwards reading is a motor
-// direction problem, fixed below, and only ONE of the two signs is ever the fix
-// for a given wheel. Flipping both cancels out and leaves the worst possible
-// state: the wheel drives one way and measures the other, so the PID error
-// grows instead of shrinking, the integrator winds to its cap, and that wheel
-// sits at full duty no matter how small the command.
+// THIS ROBOT: {1, -1}, and that -1 is independent of the -1 in
+// MOTOR_DIRECTION_SIGN below. Two separate hardware facts are both inverted on
+// the right channel: the motor is mounted mirrored (corrected below) and its
+// encoder counts the opposite way to the wheel it is bolted to (corrected
+// here). Setting both is not double-correcting a single fault -- this is the
+// pair the robot actually runs straight on, confirmed on blocks with both
+// wheels turning together.
 //
-// MEASURED, 2026-08-22, firmware with both signs at +1: a 50 mm/s forward
-// command drove the right wheel to -1513 mm/s in 0.4 s, thirty times the
-// command and negative -- the runaway above, not a theory. That measurement
-// pins down the hardware: sign(wiring) * sign(encoder wiring) = -1 on the right
-// channel, so exactly one of the two constants must be -1 and setting both is
-// identical to setting neither.
+// Do not "simplify" this to one -1. The two constants answer different
+// questions and either can be inverted on its own; on this robot both are.
 //
-// Which one depends on a fact no telemetry carries: the direction the wheel
-// physically turns. The mirrored mounting says it is the motor, so that is what
-// is set below. If a flashed robot drives straight, that was right. If it spins
-// on the spot -- right wheel turning backwards while telemetry reads a healthy
-// positive -- then the encoder was the inverted one instead: set this to
-// {1, -1} and MOTOR_DIRECTION_SIGN back to {1, 1}. Never both.
-const int8_t ENCODER_SIGN[MOTOR_COUNT] = {1, 1};
+// What telemetry cannot check is whether the pair matches the hardware at all:
+// a wheel driven backwards whose encoder also reads backwards reports exactly
+// the same healthy positive speed as a correct wheel. That check is visual --
+// the top of both wheels must move toward the FRONT of the robot on a forward
+// command. A wheel that measures positive while turning the wrong way is a
+// MOTOR_DIRECTION_SIGN problem, not an ENCODER_SIGN one.
+const int8_t ENCODER_SIGN[MOTOR_COUNT] = {1, -1};
 
 // COMMISSIONING VALUE. If a wheel physically spins backwards when the firmware
 // asks for forward, flip its sign here rather than swapping the motor leads.
@@ -80,12 +77,10 @@ const int8_t ENCODER_SIGN[MOTOR_COUNT] = {1, 1};
 // THIS ROBOT: the two gearmotors are mounted mirrored about the centre line, so
 // identical wiring drives them in opposite directions in the robot frame. The
 // right motor is the mirrored one, hence -1: the polarity that sends the left
-// wheel forward sends the right wheel backwards. The calibration sketch saw the
-// consequence of this and reported motor 2 as WHEEL_MEASURED_BACKWARDS through
-// both sweeps (arduino_mini_motor_calibration/Calibration_results.md) -- that
-// encoder was reporting the truth about a wheel driven the wrong way.
+// wheel forward would send the right wheel backwards.
 //
-// To confirm on the bench: drive slowly forward and LOOK at the wheels. Both
-// must carry the robot forward. Telemetry alone cannot tell this apart from a
-// flipped encoder, because both faults produce the same negative speed.
+// The calibration sketch saw the combined effect of this and the inverted
+// encoder above, and reported motor 2 as WHEEL_MEASURED_BACKWARDS through both
+// sweeps (arduino_mini_motor_calibration/Calibration_results.md). That report
+// says a sign is wrong somewhere in the channel; it cannot say which.
 const int8_t MOTOR_DIRECTION_SIGN[MOTOR_COUNT] = {1, -1};
