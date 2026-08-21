@@ -115,7 +115,10 @@ def main():
     read_only_descriptor = rcl_interfaces.msg.ParameterDescriptor(read_only=True)
     stamped = node.declare_parameter('stamped', False, read_only_descriptor).value
     frame_id = node.declare_parameter('frame_id', '', read_only_descriptor).value
-    speed = node.declare_parameter('speed', 0.5, read_only_descriptor).value
+    # 0.10 m/s sits mid-band for mapping. This used to default to 0.5, twice
+    # the bridge's clamp, so every keypress commanded the maximum the robot
+    # would allow and there was no slower setting to pick.
+    speed = node.declare_parameter('speed', 0.10, read_only_descriptor).value
     turn = node.declare_parameter('turn', 1.0, read_only_descriptor).value
     key_timeout = node.declare_parameter('key_timeout', 0.75, read_only_descriptor).value
 

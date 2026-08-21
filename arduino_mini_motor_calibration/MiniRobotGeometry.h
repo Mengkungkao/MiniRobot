@@ -51,8 +51,27 @@ const uint8_t MAX_DRIVE_PWM = 210;
 // COMMISSIONING VALUE. Forward motion must produce a positive speed reading on
 // both wheels. If one wheel reports negative while driving forward, flip its
 // sign here rather than swapping the encoder wires.
+//
+// Left at {1, 1} deliberately. The right wheel's backwards reading is a motor
+// direction problem, fixed below, and only ONE of the two signs is ever the fix
+// for a given wheel. Flipping both cancels out and leaves the worst possible
+// state: the wheel drives one way and measures the other, so the PID error
+// grows instead of shrinking, the integrator winds to its cap, and that wheel
+// sits at full duty no matter how small the command.
 const int8_t ENCODER_SIGN[MOTOR_COUNT] = {1, 1};
 
 // COMMISSIONING VALUE. If a wheel physically spins backwards when the firmware
 // asks for forward, flip its sign here rather than swapping the motor leads.
-const int8_t MOTOR_DIRECTION_SIGN[MOTOR_COUNT] = {1, 1};
+//
+// THIS ROBOT: the two gearmotors are mounted mirrored about the centre line, so
+// identical wiring drives them in opposite directions in the robot frame. The
+// right motor is the mirrored one, hence -1: the polarity that sends the left
+// wheel forward sends the right wheel backwards. The calibration sketch saw the
+// consequence of this and reported motor 2 as WHEEL_MEASURED_BACKWARDS through
+// both sweeps (arduino_mini_motor_calibration/Calibration_results.md) -- that
+// encoder was reporting the truth about a wheel driven the wrong way.
+//
+// To confirm on the bench: drive slowly forward and LOOK at the wheels. Both
+// must carry the robot forward. Telemetry alone cannot tell this apart from a
+// flipped encoder, because both faults produce the same negative speed.
+const int8_t MOTOR_DIRECTION_SIGN[MOTOR_COUNT] = {1, -1};

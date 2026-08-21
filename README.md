@@ -807,17 +807,35 @@ bench tests first, with the robot on blocks:
 python3 scripts/validate_motor_control.py --port /dev/arduino_mini
 ```
 
-That covers the link, both commissioning signs, closed-loop tracking from 50 to
-250 mm/s, the command watchdog and the e-stop, and it re-fits the feed-forward
-line from the PWM the loop actually settled on so a stale `FF_*` in `Config.h`
-shows up as a number instead of a hunch. Then the two that need floor space and
-a tape measure:
+That covers the link, both commissioning signs, closed-loop tracking across the
+configured speed range, the command watchdog and the e-stop, and it re-fits the
+feed-forward line from the PWM the loop actually settled on so a stale `FF_*` in
+`Config.h` shows up as a number instead of a hunch. Then the two that need floor
+space and a tape measure:
 
 ```bash
 python3 scripts/validate_motor_control.py --tests floor --distance-mm 1000
 ```
 
 Every failure prints the constant to change and its corrected value.
+
+One thing the bench tests will flag that predates them: the feed-forward fit in
+`Config.h` came from a sweep over PWM 30..210, but with the speed limit at
+0.15 m/s the robot now drives at roughly PWM 14..31. The whole band is below the
+measured range, and the fit's claim that the wheels break away at PWM 5.4 is an
+extrapolation nothing has ever checked. Re-calibrate over the band that is
+actually used -- in `arduino_mini_motor_calibration/`, at 115200 baud:
+
+```text
+RANGE,8,60
+STEP,2
+CAL
+```
+
+Then paste the four `FF_*` lines it prints into `Config.h`. Until that is done
+the PID integrator is covering for a feed-forward term that under-drives at
+every speed the robot is asked for, which shows up as a sluggish start and
+stick-slip at the bottom of the range.
 
 `--selftest` runs the same control law offline against a model of the motor,
 with no hardware attached, and prints what each failure mode does to the robot's

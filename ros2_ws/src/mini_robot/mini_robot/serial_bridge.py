@@ -111,8 +111,13 @@ class SerialBridge(Node):
         self.declare_parameter('publish_odom_tf', True)
         self.declare_parameter('command_rate_hz', 20.0)
         self.declare_parameter('reconnect_period_s', 2.0)
-        self.declare_parameter('max_linear_m_s', 0.25)
-        self.declare_parameter('max_angular_rad_s', 2.1)
+        # Must not exceed the Arduino's own MAX_LINEAR_MM_S / MAX_ANGULAR_DEG_S
+        # (Config.h). Capped for mapping: 0.15 m/s keeps a 10 Hz LiDAR sweep to
+        # 15 mm of smear, and 1.5 rad/s is the matching in-place turn rate for a
+        # 200 mm track. Clamping here rather than dropping the command means a
+        # too-fast Nav2 goal is slowed down, not ignored.
+        self.declare_parameter('max_linear_m_s', 0.15)
+        self.declare_parameter('max_angular_rad_s', 1.5)
         self.declare_parameter('wheel_diameter_m', 0.047)
         # Must match MEASURED_COUNTS_PER_REV in the sketch. Only affects the
         # /joint_states wheel angles, not odometry (the Arduino integrates

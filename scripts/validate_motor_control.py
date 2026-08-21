@@ -20,7 +20,7 @@ passed -- a wrong linear scale makes the track-width result wrong too):
 
   link      serial link, boot banner, telemetry rate, e-stop/watchdog state
   signs     ON BLOCKS. Both wheels turn the commanded way and measure positive
-  ladder    ON BLOCKS. Closed-loop tracking at 50..250 mm/s, PWM headroom,
+  ladder    ON BLOCKS. Closed-loop tracking up to MAX_LINEAR_MM_S, PWM headroom,
             and a re-fit of the feed-forward line to compare against Config.h
   watchdog  ON BLOCKS. Motors stop within COMMAND_WATCHDOG_MS of silence
   estop     ON BLOCKS. ESTOP latches, suppresses VEL, and CLEAR_ESTOP releases
@@ -392,18 +392,37 @@ def test_link(link: ArduinoLink, k: SketchConstants, args) -> Result:
 
 
 def test_signs(link: ArduinoLink, k: SketchConstants, args) -> Result:
-    """Catches the single most dangerous fault in this loop.
+    """Catches the single most dangerous fault in this loop, and the one that
+    hides from telemetry.
 
     A wheel whose encoder reads backwards makes the PID see error = target -
     (-measured), roughly twice the target and never shrinking. The integrator
     winds to its cap and the wheel goes to full PWM and stays there: the robot
     runs flat out no matter how small the command. The calibration sketch
     reports the same fault as WHEEL_MEASURED_BACKWARDS.
+
+    But the wire can only prove the two signs are CONSISTENT, never that they
+    are right. Flip both signs on one wheel and it drives backwards while
+    reporting a textbook positive speed -- a clean pass, and a robot that turns
+    a straight command into a circle. Only an eye on the wheel separates the
+    four cases, so this test asks and then reads the truth table:
+
+        physical  measured   meaning                    fix
+        forward   positive   correct                    -
+        forward   negative   encoder inverted           ENCODER_SIGN
+        backward  negative   motor inverted             MOTOR_DIRECTION_SIGN
+        backward  positive   both inverted              both
+
+    Mirror-mounted motors land in row three: identical wiring drives the two
+    sides in opposite directions, and the encoder honestly reports a wheel that
+    is being driven the wrong way.
     """
     r = Result("signs")
     speed = args.sign_speed
+    measured_ok = [True, True]
 
     for direction, sign in (("forward", 1.0), ("reverse", -1.0)):
+        print(f"    driving {direction} at {speed:.0f} mm/s -- WATCH THE WHEELS")
         samples = link.drive(sign * speed, 0.0, seconds=2.5, settle=1.5)
         if not samples:
             r.worst(FAIL, "no telemetry while driving")
@@ -419,20 +438,39 @@ def test_signs(link: ArduinoLink, k: SketchConstants, args) -> Result:
                 r.worst(FAIL, f"{WHEEL[i]} wheel does not move {direction}")
                 r.fix(f"{WHEEL[i]}: no motion -- check the TB6612 wiring, STBY, and the battery")
             elif (v > 0) != (sign > 0):
-                r.worst(FAIL, f"{WHEEL[i]} wheel measures backwards {direction}")
-                r.fix(f"{WHEEL[i]}: measures backwards. If the wheel PHYSICALLY turned the "
-                      f"right way, flip ENCODER_SIGN[{i}] to {-k.encoder_sign[i]}; if it "
-                      f"physically turned the wrong way, flip MOTOR_DIRECTION_SIGN[{i}] to "
-                      f"{-k.motor_direction_sign[i]}. Both live in MiniRobotGeometry.h and "
-                      f"must be copied into BOTH sketch folders.")
+                if direction == "forward":
+                    measured_ok[i] = False
+                r.worst(WARN, f"{WHEEL[i]} wheel measures backwards {direction}")
             elif peak >= k.max_drive_pwm:
                 r.worst(WARN, f"{WHEEL[i]} saturated its PWM at only {speed:.0f} mm/s")
                 r.fix(f"{WHEEL[i]}: PWM pinned at the ceiling for a low speed target -- the "
                       f"loop is not closing. Suspect the feed-forward fit or a stalled wheel.")
-            else:
-                r.worst(PASS, "both wheels turn and measure the commanded way")
+
         link.stop()
         time.sleep(0.8)
+
+        # Ask once, on the forward pass, where the sign convention is defined.
+        if direction != "forward":
+            continue
+        drove_backwards = ask_wrong_wheels(
+            "    which wheels physically carried the robot BACKWARDS?", args.yes)
+        if drove_backwards is None:
+            r.add("physical wheel direction NOT observed -- signs are unproven")
+            r.worst(WARN, "nobody confirmed which way the wheels actually turned")
+            r.fix("Re-run without --yes and watch the wheels. Two inverted signs on one "
+                  "wheel look identical to two correct ones in telemetry.")
+        else:
+            for i in range(2):
+                physical_ok = i not in drove_backwards
+                verdict, fixes = diagnose_signs(i, physical_ok, measured_ok[i], k)
+                r.add(f"{WHEEL[i]:5s} physical {'forward' if physical_ok else 'BACKWARD'}, "
+                      f"measured {'positive' if measured_ok[i] else 'NEGATIVE'} -> {verdict}")
+                if fixes:
+                    r.worst(FAIL, f"{WHEEL[i]} wheel: {verdict}")
+                    for line in fixes:
+                        r.fix(line)
+                else:
+                    r.worst(PASS, "both wheels drive and measure the commanded way")
 
     # Both wheels get the identical setpoint for straight motion, so a large
     # steady-state split between them is a per-wheel calibration problem.
@@ -448,6 +486,50 @@ def test_signs(link: ArduinoLink, k: SketchConstants, args) -> Result:
                   "trim with PIDM before touching the shared PID gains.")
     link.stop()
     return r
+
+
+def diagnose_signs(index: int, physical_ok: bool, measured_ok: bool,
+                   k: SketchConstants) -> tuple[str, list[str]]:
+    """Turn one wheel's (physical direction, measured sign) pair into a verdict
+    and the exact edits that fix it. See the truth table in test_signs()."""
+    wheel = WHEEL[index]
+    header = (f"{wheel}: edit MiniRobotGeometry.h, then copy that ONE file over the "
+              f"other two sketch folders -- the three copies must stay identical.")
+
+    if physical_ok and measured_ok:
+        return "correct", []
+    if physical_ok and not measured_ok:
+        return "encoder inverted", [
+            header,
+            f"  const int8_t ENCODER_SIGN[MOTOR_COUNT] = "
+            f"{_with(k.encoder_sign, index, -k.encoder_sign[index])};",
+            f"  Leave MOTOR_DIRECTION_SIGN alone -- the wheel already drives the right way.",
+        ]
+    if not physical_ok and not measured_ok:
+        return "motor inverted (mirror-mounted wheel)", [
+            header,
+            f"  const int8_t MOTOR_DIRECTION_SIGN[MOTOR_COUNT] = "
+            f"{_with(k.motor_direction_sign, index, -k.motor_direction_sign[index])};",
+            f"  Leave ENCODER_SIGN alone -- that encoder is telling the truth about a "
+            f"wheel being driven backwards. Flipping it too cancels the fix and pins "
+            f"the wheel at full duty.",
+        ]
+    return "both signs inverted", [
+        header,
+        f"  const int8_t MOTOR_DIRECTION_SIGN[MOTOR_COUNT] = "
+        f"{_with(k.motor_direction_sign, index, -k.motor_direction_sign[index])};",
+        f"  const int8_t ENCODER_SIGN[MOTOR_COUNT] = "
+        f"{_with(k.encoder_sign, index, -k.encoder_sign[index])};",
+        f"  This wheel drives backwards while reporting a positive speed, so the loop "
+        f"looks healthy and the robot still turns a straight command into a circle. "
+        f"Both signs have to move.",
+    ]
+
+
+def _with(values: list[int], index: int, replacement: int) -> str:
+    out = list(values)
+    out[index] = replacement
+    return "{" + ", ".join(str(v) for v in out) + "}"
 
 
 def test_ladder(link: ArduinoLink, k: SketchConstants, args) -> Result:

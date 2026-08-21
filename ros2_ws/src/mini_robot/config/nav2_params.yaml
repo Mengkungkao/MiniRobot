@@ -127,7 +127,10 @@ controller_server:
       # Primary controller (RPP) parameters, read from this same namespace
       # (rotate_to_heading_angular_vel / max_angular_accel below are shared
       # by the shim and RPP):
-      desired_linear_vel: 0.18
+      # Cruise speed for mapping, held under the 0.15 m/s stack limit so RPP
+      # still has room to regulate down on curves and near obstacles rather
+      # than starting already clipped.
+      desired_linear_vel: 0.12
       lookahead_dist: 0.35
       min_lookahead_dist: 0.20
       max_lookahead_dist: 0.60
@@ -322,7 +325,9 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: OPEN_LOOP
-    max_velocity: [0.25, 0.0, 1.2]
+    # x must not exceed max_linear_m_s in base.yaml, or the smoother hands the
+    # bridge commands it will only clamp again.
+    max_velocity: [0.15, 0.0, 1.2]
     min_velocity: [-0.12, 0.0, -1.2]
     max_accel: [0.35, 0.0, 1.8]
     max_decel: [-0.45, 0.0, -2.0]

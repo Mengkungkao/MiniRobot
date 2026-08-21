@@ -13,8 +13,8 @@ namespace mini_rviz_plugins
 {
 
 // Matches the serial bridge's clamps (max_linear_m_s / max_angular_rad_s).
-constexpr double kMaxLinear = 0.25;
-constexpr double kMaxAngular = 2.1;
+constexpr double kMaxLinear = 0.15;
+constexpr double kMaxAngular = 1.5;
 
 TeleopPanel::TeleopPanel(QWidget * parent)
 : rviz_common::Panel(parent)
@@ -34,7 +34,7 @@ TeleopPanel::TeleopPanel(QWidget * parent)
   speed_box_ = new QDoubleSpinBox(this);
   speed_box_->setRange(0.05, kMaxLinear);
   speed_box_->setSingleStep(0.05);
-  speed_box_->setValue(0.15);
+  speed_box_->setValue(0.10);
   speed_box_->setSuffix(QStringLiteral(" m/s"));
   turn_box_ = new QDoubleSpinBox(this);
   turn_box_->setRange(0.2, kMaxAngular);

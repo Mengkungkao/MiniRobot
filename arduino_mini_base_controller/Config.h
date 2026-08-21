@@ -30,10 +30,30 @@ const uint16_t COMMAND_WATCHDOG_MS = 500;   // stop if Pi heartbeat disappears
 const float TRACK_WIDTH_MM = 200.0f;
 
 // Limits should stay conservative until the robot has been tested on blocks.
-const float MAX_LINEAR_MM_S = 250.0f;
-const float MAX_ANGULAR_DEG_S = 120.0f;
-const float MAX_WHEEL_MM_S = 250.0f;
-const float LINEAR_ACCEL_MM_S2 = 150.0f;
+//
+// Capped for mapping. The LiDAR sweeps at 10 Hz, so whatever the robot does in
+// 100 ms is smeared across a single scan: at 150 mm/s that is 15 mm of
+// translation, small against the map resolution, and slam_toolbox can match
+// consecutive scans instead of guessing. The band the robot is driven in is
+// 50..150 mm/s -- 50 mm/s is the slow end Nav2 approaches goals at, and below
+// that the wheels are into their breakaway zone where the feed-forward fit
+// stops describing them.
+//
+// These three are one set and have to move together. In-place rotation puts
+// TRACK_WIDTH_MM/2 * omega on each wheel, so the angular limit is whatever
+// keeps that inside MAX_WHEEL_MM_S:
+//     150 mm/s / 100 mm = 1.5 rad/s = 86 deg/s
+// Raising MAX_ANGULAR_DEG_S past that does not turn faster, it just clips at
+// MAX_WHEEL_MM_S and quietly makes the turn slower than commanded.
+//
+// The ROS side must agree: max_linear_m_s / max_angular_rad_s in
+// ros2_ws/src/mini_robot/config/base.yaml, and kMaxLinear / kMaxAngular in
+// mini_rviz_plugins/src/teleop_panel.cpp. This clamp is the authoritative one;
+// the others exist so the operator is not offered speeds the base will refuse.
+const float MAX_LINEAR_MM_S = 150.0f;
+const float MAX_ANGULAR_DEG_S = 86.0f;    // 1.5 rad/s
+const float MAX_WHEEL_MM_S = 150.0f;
+const float LINEAR_ACCEL_MM_S2 = 150.0f;  // 0 -> full speed in 1.0 s
 const float ANGULAR_ACCEL_DEG_S2 = 120.0f;
 
 // -----------------------------------------------------------------------------
@@ -75,7 +95,16 @@ const float FF_SLOPE_MM_S_PER_PWM_REV[MOTOR_COUNT] = {6.3935f, 6.2200f};
 const float FF_INTERCEPT_MM_S_REV[MOTOR_COUNT] = {-37.79f, -42.40f};
 
 // Lowest PWM the SWEEP calibration command starts from.
-const uint8_t SWEEP_MIN_PWM = 30;
+//
+// 10, not 30. Once MAX_LINEAR_MM_S came down to 150 mm/s the whole drive band
+// moved to roughly PWM 14..31, so a sweep starting at 30 measures only speeds
+// the robot will now never be asked for and says nothing about the ones it
+// will. The fit above still comes from a 30..210 sweep and is extrapolated
+// below 30: it puts breakaway at PWM 5.4, which no measurement supports and no
+// gearmotor on a TB6612 achieves. Re-run the calibration over the band that is
+// actually driven -- in arduino_mini_motor_calibration/, "RANGE,8,60" then
+// "STEP,2" then "CAL" -- and paste the result over the four lines above.
+const uint8_t SWEEP_MIN_PWM = 10;
 
 // -----------------------------------------------------------------------------
 // IMU

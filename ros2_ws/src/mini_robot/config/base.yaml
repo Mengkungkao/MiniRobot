@@ -10,8 +10,10 @@ mini_serial_bridge:
     imu_frame: imu_link
     publish_odom_tf: true
     command_rate_hz: 20.0
-    max_linear_m_s: 0.25
-    max_angular_rad_s: 2.1
+    # Mirrors MAX_LINEAR_MM_S / MAX_ANGULAR_DEG_S in
+    # arduino_mini_base_controller/Config.h. Change both together.
+    max_linear_m_s: 0.15
+    max_angular_rad_s: 1.5
     wheel_diameter_m: 0.047
     # Must match MEASURED_COUNTS_PER_REV in arduino_mini_base_controller.ino.
     # Only affects the wheel angles in /joint_states (RViz animation), not
