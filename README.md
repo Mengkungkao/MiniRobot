@@ -312,7 +312,7 @@ guess, not a calibration.**
 
 Upload `arduino_mini_motor_calibration/arduino_mini_motor_calibration.ino`,
 put the robot on blocks so both wheels spin free, open a serial terminal at
-115200 baud and send:
+500000 baud and send:
 
 ```text
 CAL
@@ -824,7 +824,7 @@ One thing the bench tests will flag that predates them: the feed-forward fit in
 0.15 m/s the robot now drives at roughly PWM 14..31. The whole band is below the
 measured range, and the fit's claim that the wheels break away at PWM 5.4 is an
 extrapolation nothing has ever checked. Re-calibrate over the band that is
-actually used -- in `arduino_mini_motor_calibration/`, at 115200 baud:
+actually used -- in `arduino_mini_motor_calibration/`, at 500000 baud:
 
 ```text
 RANGE,8,60

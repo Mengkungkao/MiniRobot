@@ -10,9 +10,11 @@
 #include "MiniRobotGeometry.h"
 #include "MiniRobotPins.h"
 
-// A plain terminal baud rate, not the 500000 the ROS bridge uses. Nothing here
-// is parsed by ROS, and 115200 works in every serial monitor.
-const uint32_t SERIAL_BAUD = 115200UL;
+// The same baud the base controller uses, so one serial-monitor profile covers
+// both and a port probe does not have to guess. Nothing here is parsed by ROS.
+// The CH340 on this robot handles 500000 fine; drop to 115200 if a terminal
+// cannot open it. The IMU calibration sketch is still 115200.
+const uint32_t SERIAL_BAUD = 500000UL;
 
 // -----------------------------------------------------------------------------
 // Calibration behaviour

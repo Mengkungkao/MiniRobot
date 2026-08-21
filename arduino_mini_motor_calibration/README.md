@@ -71,8 +71,8 @@ connected or be left off.
 ## 3. Procedure
 
 **1. Upload and connect.** Open the sketch in the Arduino IDE, select Arduino
-Uno, upload. Open a serial terminal at **115200 baud** (not the 500000 the ROS
-bridge uses — nothing here is parsed by ROS), line ending "Newline" or
+Uno, upload. Open a serial terminal at **500000 baud** (the same rate the base
+controller uses, so one terminal profile covers both), line ending "Newline" or
 "Carriage return".
 
 You should see:
@@ -245,7 +245,7 @@ for a full `CAL`. `CONFIG` prints the estimate.
 
 | Message or symptom | Cause | Fix |
 | --- | --- | --- |
-| Nothing, or garbage characters | Terminal at the wrong baud | 115200, not 500000 |
+| Nothing, or garbage characters | Terminal at the wrong baud | 500000, not 115200 |
 | `ERR,FIT_FAILED,MOTOR_n,used=0,...` + `CAUSE,NO_ENCODER_MOTION` | The wheel may be spinning, but the encoder netted zero counts. Most often channel **B** is floating or on the wrong pin — the ISR then reads a constant B and counts `+1, -1, +1, -1`, netting zero however fast the wheel turns. Also: flat battery, `STBY` low, channel A unplugged, wheel jammed | `CHECK`, then `TICKS,20` and turn that wheel by hand. If the count stays near zero while the other wheel counts cleanly, it is the encoder wiring: left B = `D6`, right B = `D11` |
 | `ERR,FIT_FAILED,MOTOR_n,...` + `CAUSE,WHEEL_MEASURED_BACKWARDS` | Wheel turns opposite to the command, or its encoder reads inverted. Normal on a differential drive, where the right motor is mounted mirrored | `HOLD,<motor>,105` and watch the wheel. Rolls the robot **backward** → the motor is reversed → `SIGN,<motor>,MOT,-1`. Rolls the robot **forward** → the encoder is reversed → `SIGN,<motor>,ENC,-1`. Then `CHECK` again and `CAL`. See the warning below |
 | `ERR,FIT_FAILED,MOTOR_n,...` + `CAUSE,TOO_SLOW_OR_TOO_FEW_POINTS` | The wheel moved, but never above `MIN_VALID_SPEED_MM_S` | Charge the battery, check `STBY`, confirm the wheel spins free |

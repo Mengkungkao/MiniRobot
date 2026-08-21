@@ -9,7 +9,11 @@
 #include "LinearFit.h"
 
 // Runtime-adjustable sweep settings, declared extern in Config.h.
-uint16_t sweepMinPWM = 30;
+// 10, matching SWEEP_MIN_PWM in the base controller. With MAX_LINEAR_MM_S at
+// 150 mm/s the firmware drives at roughly PWM 14..31, so a sweep starting at 30
+// measures almost nothing the robot actually uses. For a fit aimed squarely at
+// that band, send "RANGE,8,60" and "STEP,2" before CAL.
+uint16_t sweepMinPWM = 10;
 uint16_t sweepMaxPWM = MAX_DRIVE_PWM;
 uint16_t sweepStepPWM = 10;
 uint16_t settleMs = 400;

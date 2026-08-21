@@ -136,6 +136,28 @@ void streamTicks(uint32_t durationMs) {
 }
 
 void printConfig() {
+  // Geometry and signs first, because they decide what every number below
+  // MEANS, and a bench sketch flashed from a stale checkout is otherwise
+  // indistinguishable from a current one.
+  //
+  // This robot lost a calibration run to exactly that. The firmware carried the
+  // corrected ENCODER_SIGN for the right wheel and this sketch, flashed
+  // earlier, did not -- so a sweep labelled FORWARD drove the wheel one way
+  // here and the other way there, and every motor 2 point came back rejected
+  // with no hint that the two binaries disagreed. Printing them at boot costs
+  // a few hundred bytes of a sketch that is half empty and turns a silent
+  // wrong answer into a visible one.
+  Serial.print(F("INFO,GEOMETRY,counts="));
+  Serial.print(MEASURED_COUNTS_PER_REV[LEFT], 1);
+  Serial.print('/');
+  Serial.print(MEASURED_COUNTS_PER_REV[RIGHT], 1);
+  Serial.print(F(",dia="));
+  Serial.print(WHEEL_DIAMETER_MM, 2);
+  Serial.print(F(",maxpwm="));
+  Serial.println((int)MAX_DRIVE_PWM);
+  printSigns();
+  Serial.println(F("INFO,COMPARE_WITH,CFG,ON_arduino_mini_base_controller,THEY_MUST_AGREE"));
+
   Serial.print(F("INFO,CONFIG,range="));
   Serial.print(sweepMinPWM);
   Serial.print(F(".."));

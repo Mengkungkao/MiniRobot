@@ -15,7 +15,8 @@ set -euo pipefail
 # thing that can is what each one says on the wire, so that is what we check.
 #
 # The Arduino announces itself in ASCII ('READY,', 'T,', 'INFO,', ...) at either
-# 500000 baud (base controller) or 115200 (the calibration sketches). The
+# 500000 baud (base controller and motor calibration) or 115200 (IMU
+# calibration). The
 # COIN-D6 emits 0xAA 0x55 framed binary packets at 230400 and free-runs without
 # being asked. Neither test writes anything by default, so the LiDAR motor is
 # never commanded to spin.

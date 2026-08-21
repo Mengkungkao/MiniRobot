@@ -48,7 +48,7 @@
   2. Use a charged battery, and keep it charged across the whole run. The fit
      is only valid at the bus voltage it was measured at, so a sagging battery
      bakes a wrong slope into the firmware.
-  3. Flash this sketch and open a serial terminal at 115200 baud. Any line
+  3. Flash this sketch and open a serial terminal at 500000 baud. Any line
      ending works -- "Newline", "Carriage return" or "Both NL & CR".
   4. Check MEASURED_COUNTS_PER_REV in MiniRobotGeometry.h (this folder) is
      right for your encoders. Everything printed here is
