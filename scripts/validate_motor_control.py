@@ -189,6 +189,9 @@ class ArduinoLink:
         self.samples: list[Sample] = []
         self.text_lines: list[str] = []
         self.ready_banner: Optional[str] = None
+        # True once the board's CFG reply has been matched against the sketch
+        # source; False if it disagrees or the firmware is too old to answer.
+        self.firmware_matches_source: Optional[bool] = None
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
 
@@ -340,11 +343,124 @@ def ask_float(prompt: str) -> Optional[float]:
         return None
 
 
+def ask_wrong_wheels(prompt: str, assume_yes: bool) -> Optional[list[int]]:
+    """Ask which wheels physically drove the wrong way.
+
+    Returns the wheel indices that went backwards, an empty list if both were
+    right, or None if nobody actually looked -- which is not the same answer and
+    must not be recorded as a pass. Bare Enter means None for the same reason:
+    this is the one check telemetry cannot make, so it defaults to "unproven"
+    rather than "fine".
+    """
+    if assume_yes:
+        print(f"{prompt} [--yes: not observed]")
+        return None
+    try:
+        answer = input(f"{prompt} [none/left/right/both] ").strip().lower()
+    except EOFError:
+        return None
+    if answer in ("none", "n", "neither", "ok"):
+        return []
+    if answer.startswith("l"):
+        return [LEFT_INDEX]
+    if answer.startswith("r"):
+        return [RIGHT_INDEX]
+    if answer.startswith("b"):
+        return [LEFT_INDEX, RIGHT_INDEX]
+    print("  no answer recorded -- treating the wheel directions as unverified")
+    return None
+
+
 # -----------------------------------------------------------------------------
 # Tests
 # -----------------------------------------------------------------------------
 
+# Motor numbering as the firmware uses it: 1 = LEFT (TB6612 channel A),
+# 2 = RIGHT (channel B). Same order as every per-wheel array in the sketch and
+# every per-wheel pair in the telemetry line.
+LEFT_INDEX, RIGHT_INDEX = 0, 1
 WHEEL = ("LEFT", "RIGHT")
+
+
+def check_firmware_matches_source(link: ArduinoLink, k: SketchConstants, r: Result) -> None:
+    """Prove the board is running the sketch this script is reading.
+
+    Everything else here compares the robot against constants loaded from
+    Config.h and MiniRobotGeometry.h. If the board was flashed before those
+    files were last edited, every corrected value this script prints is
+    computed from numbers the robot is not using -- and the sign advice in
+    particular inverts: told to "flip MOTOR_DIRECTION_SIGN", an operator whose
+    source already contains the fix would flip it back out and restore the
+    runaway. So this is a hard stop, not a warning.
+
+    The board answers CFG with its compiled-in constants and also volunteers
+    them at boot. Firmware older than that command answers nothing, which is
+    itself the answer.
+    """
+    link.send("CFG")
+    deadline = time.monotonic() + 1.5
+    cfg = None
+    while time.monotonic() < deadline and cfg is None:
+        # The boot banner emits the same line, so accept an earlier one too.
+        for line in link.text_lines:
+            if line.startswith("INFO,CFG,"):
+                cfg = line
+                break
+        time.sleep(0.05)
+
+    if cfg is None:
+        link.firmware_matches_source = False
+        r.worst(FAIL, "the board is running firmware older than this sketch")
+        r.add("no INFO,CFG reply -- this firmware predates the CFG command")
+        r.fix("FLASH THE BOARD FIRST. Upload arduino_mini_base_controller/ to the Uno, "
+              "then re-run. Until then the board is not running the constants in this "
+              "source tree, and every correction printed here would be computed from "
+              "numbers it is not using.")
+        return
+
+    fields = {}
+    for part in cfg[len("INFO,CFG,"):].split(","):
+        key, _, value = part.partition("=")
+        fields[key] = value
+    r.add(f"firmware reports: {cfg[len('INFO,CFG,'):]}")
+
+    def pair(value: str) -> list[float]:
+        return [float(x) for x in value.split("/")]
+
+    differences = []
+    try:
+        checks = [
+            ("counts", pair(fields["counts"]), k.counts_per_rev, "MEASURED_COUNTS_PER_REV"),
+            ("enc", pair(fields["enc"]), [float(s) for s in k.encoder_sign], "ENCODER_SIGN"),
+            ("mot", pair(fields["mot"]), [float(s) for s in k.motor_direction_sign],
+             "MOTOR_DIRECTION_SIGN"),
+            ("maxlin", [float(fields["maxlin"])], [k.max_linear_mm_s], "MAX_LINEAR_MM_S"),
+            ("maxang", [float(fields["maxang"])], [k.max_angular_deg_s], "MAX_ANGULAR_DEG_S"),
+            ("maxwheel", [float(fields["maxwheel"])], [k.max_wheel_mm_s], "MAX_WHEEL_MM_S"),
+            ("track", [float(fields["track"])], [k.track_width_mm], "TRACK_WIDTH_MM"),
+            ("maxpwm", [float(fields["maxpwm"])], [float(k.max_drive_pwm)], "MAX_DRIVE_PWM"),
+        ]
+    except (KeyError, ValueError) as exc:
+        link.firmware_matches_source = None
+        r.worst(WARN, f"could not read the firmware's CFG line ({exc})")
+        return
+
+    for _, on_board, in_source, name in checks:
+        if any(abs(a - b) > 1e-3 for a, b in zip(on_board, in_source)):
+            differences.append(f"{name}: board has {on_board}, source has {in_source}")
+
+    if differences:
+        link.firmware_matches_source = False
+        r.worst(FAIL, "the board is running different constants from this source tree")
+        for line in differences:
+            r.add(f"MISMATCH  {line}")
+        r.fix("FLASH THE BOARD FIRST. The source tree has been edited since the Uno was "
+              "last programmed, so the board is not running the constants listed above. "
+              "Upload arduino_mini_base_controller/ and re-run.")
+        return
+
+    link.firmware_matches_source = True
+    r.add("firmware constants match this source tree")
 
 
 def test_link(link: ArduinoLink, k: SketchConstants, args) -> Result:
@@ -369,6 +485,8 @@ def test_link(link: ArduinoLink, k: SketchConstants, args) -> Result:
     for line in link.text_lines[-12:]:
         if line.startswith(("ERR,", "INFO,IMU")):
             r.add(f"board says: {line}")
+
+    check_firmware_matches_source(link, k, r)
 
     last = link.latest()
     if last is None:

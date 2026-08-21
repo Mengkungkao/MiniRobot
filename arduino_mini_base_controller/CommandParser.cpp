@@ -12,6 +12,45 @@
 static char commandBuffer[96];
 static uint8_t commandLength = 0;
 
+// Report the constants this binary was compiled with.
+//
+// Nothing else on the wire can tell a host whether the board is running the
+// sketch that is currently on disk. Telemetry looks identical either way, and
+// this robot has now lost time twice to a source tree that had been fixed and a
+// board that had not been reflashed -- the second time a stale ENCODER_SIGN
+// pinned a wheel at full duty while the fixed source said it could not happen.
+// A host that reads this line can refuse to give advice computed from constants
+// the robot is not actually using.
+//
+// The signs are int8_t, which is 'signed char': printing one directly emits a
+// character, not a number, so they are cast to int.
+static void printBuildConfig() {
+  Serial.print(F("INFO,CFG,counts="));
+  Serial.print(MEASURED_COUNTS_PER_REV[LEFT], 1);
+  Serial.print('/');
+  Serial.print(MEASURED_COUNTS_PER_REV[RIGHT], 1);
+  Serial.print(F(",dia="));
+  Serial.print(WHEEL_DIAMETER_MM, 2);
+  Serial.print(F(",track="));
+  Serial.print(TRACK_WIDTH_MM, 1);
+  Serial.print(F(",maxlin="));
+  Serial.print(MAX_LINEAR_MM_S, 1);
+  Serial.print(F(",maxang="));
+  Serial.print(MAX_ANGULAR_DEG_S, 1);
+  Serial.print(F(",maxwheel="));
+  Serial.print(MAX_WHEEL_MM_S, 1);
+  Serial.print(F(",maxpwm="));
+  Serial.print((int)MAX_DRIVE_PWM);
+  Serial.print(F(",enc="));
+  Serial.print((int)ENCODER_SIGN[LEFT]);
+  Serial.print('/');
+  Serial.print((int)ENCODER_SIGN[RIGHT]);
+  Serial.print(F(",mot="));
+  Serial.print((int)MOTOR_DIRECTION_SIGN[LEFT]);
+  Serial.print('/');
+  Serial.println((int)MOTOR_DIRECTION_SIGN[RIGHT]);
+}
+
 // Parse and execute one complete command line (see the top-of-sketch comment
 // for the command set). Tokenizes in place with strtok_r and replies with
 // ACK/ERR.
@@ -103,6 +142,9 @@ static void processCommand(char *line) {
   else if (strcmp(command, "IMU") == 0) {
     printImuInfo();
   }
+  else if (strcmp(command, "CFG") == 0) {
+    printBuildConfig();
+  }
   else if (strcmp(command, "PID") == 0) {
     char *pText = strtok_r(NULL, ",", &savePtr);
     char *iText = strtok_r(NULL, ",", &savePtr);
@@ -185,5 +227,8 @@ void readSerialCommands() {
 
 void printReady() {
   Serial.println(F("READY,mini_ROS2_low_level_v1"));
+  // Emitted unprompted at boot so a host that is only listening still learns
+  // which constants this board is running.
+  printBuildConfig();
   printImuInfo();
 }

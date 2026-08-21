@@ -58,6 +58,20 @@ const uint8_t MAX_DRIVE_PWM = 210;
 // state: the wheel drives one way and measures the other, so the PID error
 // grows instead of shrinking, the integrator winds to its cap, and that wheel
 // sits at full duty no matter how small the command.
+//
+// MEASURED, 2026-08-22, firmware with both signs at +1: a 50 mm/s forward
+// command drove the right wheel to -1513 mm/s in 0.4 s, thirty times the
+// command and negative -- the runaway above, not a theory. That measurement
+// pins down the hardware: sign(wiring) * sign(encoder wiring) = -1 on the right
+// channel, so exactly one of the two constants must be -1 and setting both is
+// identical to setting neither.
+//
+// Which one depends on a fact no telemetry carries: the direction the wheel
+// physically turns. The mirrored mounting says it is the motor, so that is what
+// is set below. If a flashed robot drives straight, that was right. If it spins
+// on the spot -- right wheel turning backwards while telemetry reads a healthy
+// positive -- then the encoder was the inverted one instead: set this to
+// {1, -1} and MOTOR_DIRECTION_SIGN back to {1, 1}. Never both.
 const int8_t ENCODER_SIGN[MOTOR_COUNT] = {1, 1};
 
 // COMMISSIONING VALUE. If a wheel physically spins backwards when the firmware

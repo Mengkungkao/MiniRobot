@@ -62,6 +62,7 @@
     CAL_IMU
     MAG,<0|1>
     IMU
+    CFG
     PID,<kp>,<ki>,<kd>[,<lambda>,<mu>]
     PIDM,<motor_1_to_2>,<kp>,<ki>,<kd>[,<lambda>,<mu>]
     SWEEP,<motor_1_to_2>,<pwm_step_1_to_50>,<dwell_ms_min_100>[,R]
