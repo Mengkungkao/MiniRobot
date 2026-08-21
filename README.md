@@ -728,6 +728,38 @@ arguments to `PID`/`PIDM` if you want to experiment.
 
 ## 16. Mapping with RViz, SLAM and Nav2
 
+### Pre-flight: is the robot actually ready to map?
+
+With everything connected and `robot.launch.py` running, one command answers
+whether a mapping run is worth starting:
+
+```bash
+python3 scripts/preflight_slam.py
+```
+
+It runs four phases, ordered so a failure is easy to place:
+
+| phase | what it proves |
+| --- | --- |
+| `graph` | the four nodes are up, every topic is publishing at rate, the base reports healthy, no latched e-stop |
+| `sensors` | the IMU reads 1 g at rest with little gyro drift, the LiDAR returns enough valid beams, frames are named right |
+| `model` | the URDF parses, has every expected link and joint, and the TF tree reaches `odom → base_footprint → base_link → laser` |
+| `motion` | **on blocks**: a `/cmd_vel` command reaches the wheels, both turn the right way, they match each other, `/odom` agrees, and a CCW turn makes the IMU yaw rate go positive |
+
+Everything before `motion` is read-only and safe on the floor; `motion` spins
+the wheels and asks first. `--no-motion` stops after `model`, `--yes` skips the
+prompt. A wheel that runs away aborts the run and stops the motors.
+
+It ends with `READY FOR SLAM` or a list of what to fix and how. Mapping on top
+of a broken TF tree or a mismatched wheel pair produces a map that cannot be
+salvaged, so it is worth the thirty seconds.
+
+For faults below the ROS layer — wheel signs, feed-forward, encoder scale —
+use `scripts/validate_motor_control.py` on the Pi, which bypasses ROS and talks
+to the Arduino directly (section 19).
+
+### Starting SLAM
+
 Keep `robot.launch.py` running on the Pi. On the workstation:
 
 ```bash
