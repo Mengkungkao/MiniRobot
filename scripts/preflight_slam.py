@@ -136,6 +136,10 @@ class Preflight(Node):
         self.cmd_out = Probe()
         self.description: str | None = None
         self.runaway = False
+        # Set when the base controller has never reported telemetry. Everything
+        # the bridge derives from it is then missing as a consequence, and
+        # saying so once beats repeating it on every downstream check.
+        self.base_mute = False
 
         sensor_qos = QoSProfile(depth=20, reliability=ReliabilityPolicy.BEST_EFFORT,
                                 history=HistoryPolicy.KEEP_LAST)
@@ -292,6 +296,53 @@ def phase_graph(node: Preflight, args) -> Phase:
         p.add("base health", WARN, "no base controller entry in /diagnostics")
         return p
 
+    # Telemetry age is the load-bearing field. The bridge reports 'inf' when it
+    # has never decoded a single 'T,' line, and in that state every other value
+    # it publishes is a constructor default rather than a reading -- so they
+    # must not be reported as if the robot had said them.
+    age_text = values.get("telemetry_age_s", "inf")
+    mute = age_text == "inf"
+    last_rx = values.get("last_rx", "")
+
+    if mute:
+        # last_rx is whatever the board did say, and it usually names the fault
+        # outright. A board answering ERR,UNKNOWN_COMMAND,VEL is alive, at the
+        # right baud, and running a sketch that has no VEL command -- which
+        # means the wrong sketch, not a wiring problem.
+        if "UNKNOWN_COMMAND" in last_rx:
+            detail = f"the board answers but does not know the command: '{last_rx}'"
+            fix = ("The Arduino is running the WRONG SKETCH. It is alive and at the "
+                   "right baud, but it has no VEL command and publishes no telemetry, "
+                   "so the bridge has nothing to turn into /odom, /imu/data or TF.\n"
+                   "      Flash arduino_mini_base_controller/ to the Uno and relaunch.\n"
+                   "      The bench sketches (motor / IMU calibration) look like this.")
+        elif last_rx:
+            detail = f"no telemetry ever received; last line was '{last_rx}'"
+            fix = ("The board is talking but never sends a 'T,' telemetry line. Check "
+                   "which sketch is flashed and that the baud matches SERIAL_BAUD.")
+        else:
+            detail = "no telemetry ever received, and the board has said nothing at all"
+            fix = ("The port opened but the Arduino is silent. Check it is powered and "
+                   "actually flashed, that /dev/arduino_mini points at the Uno and not "
+                   "the LiDAR, and that the baud matches SERIAL_BAUD in Config.h.")
+        p.add("base telemetry", FAIL, detail, fix)
+        # Say plainly that the rest of the base's numbers are meaningless here,
+        # rather than printing defaults that read like healthy results.
+        p.add("base state", SKIP,
+              "e-stop / watchdog / IMU unknown: the base has not reported anything")
+        node.base_mute = True
+        # /imu/data, /odom and /joint_states are all decoded from the same
+        # telemetry line. Their failures above are this one fault seen three
+        # more times, so drop their generic advice rather than sending the
+        # reader off to check three healthy nodes.
+        for check in p.checks:
+            if check.name in ("topic /imu/data", "topic /odom",
+                              "topic /joint_states") and check.status == FAIL:
+                check.detail += " -- decoded from base telemetry, see above"
+                check.fix = ""
+        return p
+
+    p.add("base telemetry", PASS, f"{age_text} s old")
     p.add("base health", PASS if message.startswith("Base controller operational")
           else WARN, message)
     if values.get("estop_latched") == "True":
@@ -316,9 +367,15 @@ def phase_graph(node: Preflight, args) -> Phase:
 def phase_sensors(node: Preflight, args) -> Phase:
     p = Phase("sensors")
 
+    if node.base_mute:
+        p.add("base-derived sensors", SKIP,
+              "IMU, odometry and joint states all come from base telemetry, "
+              "which has not arrived -- fix that first")
+
     imu = node.imu.last
     if imu is None:
-        p.add("IMU", FAIL, "no /imu/data")
+        p.add("IMU", SKIP if node.base_mute else FAIL,
+              "no /imu/data" + (" (base is mute)" if node.base_mute else ""))
     else:
         magnitude = math.sqrt(imu.linear_acceleration.x ** 2 +
                               imu.linear_acceleration.y ** 2 +
@@ -381,7 +438,8 @@ def phase_sensors(node: Preflight, args) -> Phase:
 
     odom = node.odom.last
     if odom is None:
-        p.add("odometry", FAIL, "no /odom")
+        p.add("odometry", SKIP if node.base_mute else FAIL,
+              "no /odom" + (" (base is mute)" if node.base_mute else ""))
     else:
         ok = (odom.header.frame_id == "odom" and
               odom.child_frame_id == "base_footprint")
@@ -391,7 +449,8 @@ def phase_sensors(node: Preflight, args) -> Phase:
 
     joints = node.joints.last
     if joints is None:
-        p.add("joint states", FAIL, "no /joint_states")
+        p.add("joint states", SKIP if node.base_mute else FAIL,
+              "no /joint_states" + (" (base is mute)" if node.base_mute else ""))
     else:
         missing = [j for j in DRIVEN_JOINTS if j not in list(joints.name)]
         if missing:
@@ -458,8 +517,13 @@ def phase_model(node: Preflight, args) -> Phase:
         try:
             tf = node.tf_buffer.lookup_transform(parent, child, rclpy.time.Time())
         except Exception as exc:
-            p.add(f"tf {parent}->{child}", FAIL, f"missing ({type(exc).__name__})",
-                  f"{why}. Without it the TF tree is broken and SLAM cannot run.")
+            if parent == "odom" and node.base_mute:
+                p.add(f"tf {parent}->{child}", SKIP,
+                      "missing because the base reports no telemetry to build it from")
+            else:
+                p.add(f"tf {parent}->{child}", FAIL,
+                      f"missing ({type(exc).__name__})",
+                      f"{why}. Without it the TF tree is broken and SLAM cannot run.")
             continue
         t = tf.transform.translation
         p.add(f"tf {parent}->{child}", PASS,
@@ -492,6 +556,14 @@ def phase_motion(node: Preflight, args) -> Phase:
 
     if args.no_motion:
         p.add("motion", SKIP, "--no-motion given")
+        return p
+
+    # Check this before announcing anything: there is no point asking someone
+    # to confirm the robot is on blocks for a test that cannot run.
+    if node.base_mute:
+        p.add("motion", SKIP,
+              "the base reports no wheel telemetry, so driving it would prove "
+              "nothing -- fix the base first")
         return p
 
     print()
