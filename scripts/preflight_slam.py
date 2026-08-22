@@ -59,8 +59,11 @@ EXPECTED_JOINTS = {"base_footprint_joint", "left_wheel_joint",
 DRIVEN_JOINTS = ["left_wheel_joint", "right_wheel_joint"]
 
 # Expected publish rates. Lower bounds, generous enough not to fire on jitter.
+# /diagnostics is published at 1 Hz, so the floor has to tolerate a single
+# message landing inside the observation window.
 MIN_RATES = {"/scan": 4.0, "/imu/data": 10.0, "/odom": 10.0,
-             "/joint_states": 10.0, "/diagnostics": 0.5}
+             "/joint_states": 10.0, "/diagnostics": 0.2}
+RATE_WINDOW_S = 5.0
 
 STREAM_HZ = 20.0
 RUNAWAY_MM_S = 300.0
@@ -111,13 +114,20 @@ class Probe:
         self.count += 1
         self.last = msg
 
-    def rate(self) -> float:
-        # Measure over the span actually observed, not the whole window: a topic
-        # that starts late should not be reported as slow.
-        if self.count < 2 or self.first_time is None:
+    def rate(self, window: float) -> float:
+        """Messages per second over the observation window.
+
+        Prefers the span actually observed, so a topic that starts publishing
+        late is not reported as slow. One message gives no span at all, so fall
+        back to the whole window -- otherwise a 1 Hz topic that lands a single
+        message reads as 0.0 Hz and looks dead when it is merely slow."""
+        if self.count == 0:
             return 0.0
-        span = self.last_time - self.first_time
-        return (self.count - 1) / span if span > 0 else 0.0
+        if self.count >= 2 and self.first_time is not None:
+            span = self.last_time - self.first_time
+            if span > 0:
+                return (self.count - 1) / span
+        return self.count / window if window > 0 else 0.0
 
 
 # -----------------------------------------------------------------------------
@@ -247,7 +257,7 @@ class Preflight(Node):
 def phase_graph(node: Preflight, args) -> Phase:
     p = Phase("graph")
 
-    node.spin(4.0)
+    node.spin(RATE_WINDOW_S)
 
     names = {n for n, _ in node.get_node_names_and_namespaces()}
     absent = []
@@ -269,13 +279,13 @@ def phase_graph(node: Preflight, args) -> Phase:
     for topic, probe in (("/scan", node.scan), ("/imu/data", node.imu),
                          ("/odom", node.odom), ("/joint_states", node.joints),
                          ("/diagnostics", node.diag)):
-        rate = probe.rate()
+        rate = probe.rate(RATE_WINDOW_S)
         floor = MIN_RATES[topic]
         if probe.count == 0:
             p.add(f"topic {topic}", FAIL, "no messages",
                   f"Nothing is publishing {topic}. Check the node that owns it.")
         elif rate < floor:
-            p.add(f"topic {topic}", WARN, f"{rate:.1f} Hz (expected >= {floor:.0f})")
+            p.add(f"topic {topic}", WARN, f"{rate:.1f} Hz (expected >= {floor:g})")
         else:
             p.add(f"topic {topic}", PASS, f"{rate:.1f} Hz")
 
