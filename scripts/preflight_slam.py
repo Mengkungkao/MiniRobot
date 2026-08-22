@@ -45,6 +45,9 @@ from tf2_ros import Buffer, TransformListener
 PASS, WARN, FAIL, SKIP = "PASS", "WARN", "FAIL", "SKIP"
 SEVERITY = {SKIP: 0, PASS: 1, WARN: 2, FAIL: 3}
 
+# Wheel order as the base reports it: 1 = LEFT, 2 = RIGHT, matching the
+# firmware's arrays and the /joint_states name list.
+WHEEL = ("LEFT", "RIGHT")
 WHEEL_RADIUS_M = 0.0235                 # 47 mm diameter
 RAD_S_TO_MM_S = WHEEL_RADIUS_M * 1000.0
 STANDARD_GRAVITY = 9.80665
@@ -150,6 +153,11 @@ class Preflight(Node):
         # the bridge derives from it is then missing as a consequence, and
         # saying so once beats repeating it on every downstream check.
         self.base_mute = False
+        # (wheel index, speed mm/s) of the first sample past the guard, and a
+        # rolling window of recent wheel speeds for context.
+        self.runaway_event: tuple[int, float] | None = None
+        self.runaway_trace: list[float] = []
+        self.trace: list[list[float]] = []
 
         sensor_qos = QoSProfile(depth=20, reliability=ReliabilityPolicy.BEST_EFFORT,
                                 history=HistoryPolicy.KEEP_LAST)
@@ -174,8 +182,23 @@ class Preflight(Node):
 
     def _on_joints(self, msg: JointState) -> None:
         self.joints.hit(msg)
-        if len(msg.velocity) >= 2:
-            if max(abs(v) * RAD_S_TO_MM_S for v in msg.velocity[:2]) > RUNAWAY_MM_S:
+        if len(msg.velocity) < 2:
+            return
+        speeds = [v * RAD_S_TO_MM_S for v in msg.velocity[:2]]
+        # Keep a short trace so a tripped guard can say what actually happened.
+        # Aborting is the right reflex; discarding the evidence is not, and a
+        # bare "a wheel exceeded 300 mm/s" cannot tell an inverted feedback sign
+        # from a wheel that broke away late and overshot.
+        self.trace.append(speeds)
+        if len(self.trace) > 200:
+            self.trace.pop(0)
+        for i, v in enumerate(speeds):
+            if abs(v) > RUNAWAY_MM_S and self.runaway_event is None:
+                self.runaway_event = (i, v)
+                # Snapshot the run-up now. The rolling trace keeps filling while
+                # the motors are commanded to stop, so reading it afterwards
+                # shows the deceleration rather than what tripped the guard.
+                self.runaway_trace = [t[i] for t in self.trace[-10:]]
                 self.runaway = True
 
     def _on_description(self, msg: String) -> None:
@@ -602,10 +625,38 @@ def phase_motion(node: Preflight, args) -> Phase:
     # Forward first: it is the direction every sign convention is defined from.
     wheels, _, odom_vx = node.drive(speed, 0.0, seconds=3.0, settle=1.5)
     if node.runaway:
-        p.add("forward", FAIL, f"a wheel exceeded {RUNAWAY_MM_S:.0f} mm/s -- aborted",
-              "Runaway wheel: its speed feedback carries the wrong sign, so the "
-              "PID drives it harder instead of correcting. Fix the signs with "
-              "scripts/validate_motor_control.py on the Pi before anything else.")
+        target = speed * 1000.0
+        index, peak = node.runaway_event if node.runaway_event else (0, float("nan"))
+        wheel = WHEEL[index]
+        detail = (f"{wheel} wheel reached {peak:+.0f} mm/s on a {target:+.0f} mm/s "
+                  f"command -- aborted")
+        if node.runaway_trace:
+            recent = " ".join(f"{v:+.0f}" for v in node.runaway_trace)
+            detail += f"\n           run-up: {recent}"
+
+        # Two very different faults trip the same guard, and they need opposite
+        # fixes. If the wheel is running the wrong way, the loop is diverging
+        # because its feedback sign is inverted -- the error grows and the
+        # integrator winds up. If it is running the right way but far too fast,
+        # the loop is closing, just violently: the feed-forward under-drives, the
+        # integrator winds up while the wheel is still stuck below breakaway, and
+        # when it finally moves it is thrown well past target.
+        if peak * target < 0:
+            p.add("forward", FAIL, detail,
+                  f"The {wheel} wheel is being driven one way and measured the "
+                  f"other, so the PID drives it harder instead of correcting. This "
+                  f"is a sign fault. Run scripts/validate_motor_control.py "
+                  f"--tests link,signs on the Pi; it will name the constant.")
+        else:
+            p.add("forward", FAIL, detail,
+                  f"The {wheel} wheel runs the RIGHT WAY but massively overshoots, "
+                  f"so this is not a sign fault -- the loop is closing, just "
+                  f"violently. The usual cause is a feed-forward fit that does not "
+                  f"cover the speeds being driven: the wheel sits below breakaway "
+                  f"while the integrator winds up, then lurches past target when it "
+                  f"finally moves. Re-run the motor calibration over the band "
+                  f"actually used (RANGE,8,60 then STEP,2 then CAL) and paste the "
+                  f"fresh FF_* into Config.h.")
         return p
     if wheels is None:
         p.add("forward", FAIL, "no wheel telemetry while driving")
