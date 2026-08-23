@@ -24,9 +24,12 @@
   a fit is meaningless until "forward" means the same thing to the encoder, to
   the motor and to the robot. See DIR below.
 
-  It is a bench tool: no IMU, no odometry, no PID, no ROS protocol. Flash it,
-  calibrate, paste the printed constants into the firmware, then flash the main
-  firmware back.
+  It is a bench tool and nothing more. It does exactly five things: drive the
+  TB6612 channels, run motors 1 and 2, work out which way each one turns, read
+  the encoders, and print the measured points plus the fitted forward and
+  reverse curves. No IMU, no odometry, no PID, no ROS protocol, no closed-loop
+  anything. Flash it, calibrate, paste the printed constants into the firmware,
+  then flash the main firmware back.
 
   The pin map, wheel geometry and commissioning signs live in the MiniRobot*
   files in this folder, which are kept byte-identical to the copies in
@@ -36,10 +39,10 @@
 
   Sketch layout (the IDE compiles every .cpp/.h in this folder):
     Config.h            baud, fit thresholds, DIR and sweep settings
-    Direction.h/.cpp    the session signs, DIR and CHECK
-    Measure.h/.cpp      abort handling, one speed measurement, HOLD, TICKS
+    Direction.h/.cpp    the session signs and DIR
+    Measure.h/.cpp      abort handling, one speed measurement, TICKS
     Fit.h/.cpp          least squares, the results table, the paste block
-    Sweep.h/.cpp        the PWM sweep, CAL and VERIFY
+    Sweep.h/.cpp        the PWM sweep and CAL
     Commands.h/.cpp     the serial command set, CONFIG and HELP
     arduino_mini_motor_calibration.ino  setup()/loop() only
 
@@ -87,13 +90,9 @@
   8. Paste the printed "const float FF_..." block into
      arduino_mini_base_controller/Config.h, replacing the four existing lines.
      Never paste a block containing 0.000f -- that wheel has no fit.
-  9. Optional but recommended:  VERIFY
-     drives a few target speeds through the freshly fitted feed-forward and
-     reports the open-loop error. Under ~10% is a good fit; PID cleans up the
-     rest.
 
-  Sending any character while a sweep is running aborts it and coasts the
-  motors. Bare line endings do not count, so a terminal that appends CR+LF
+  Sending any character while a sweep or TICKS is running aborts it and coasts
+  the motors. Bare line endings do not count, so a terminal that appends CR+LF
   cannot abort the very run it just started. DIR's probes are the exception:
   they are under two seconds each and swallow whatever you type, because a
   keystroke there is far more likely to be an early answer than an abort.
@@ -102,15 +101,11 @@
   ------------------------------------------------------------
     DIR                        commission both signs from one look per wheel
     DIR,<motor>                ... for one wheel only
-    CHECK                      drive each wheel forward, check the encoder agrees
     SIGN                       print the commissioning signs
-    CAL                        calibrate both motors, both directions
+    CAL                        sweep and fit both motors, both directions
     CAL,<motor>                one motor (1 = left, 2 = right), both directions
     SWEEP,<motor>[,R]          one motor, one direction (R = reverse)
-    VERIFY                     open-loop check of the fitted constants
-    VERIFY,<motor>             ... for one motor
     RESULT                     reprint the last fit table and constants block
-    HOLD,<motor>,<pwm>[,R]     hold one PWM and stream the measured speed
     TICKS[,<seconds>]          stream raw encoder counts (counts-per-rev check)
     STEP,<pwm_step>            PWM step size             (default 10)
     RANGE,<min_pwm>,<max_pwm>  PWM sweep range           (default 10..210)
@@ -124,10 +119,8 @@
   ------------------------------------------------------------
     C,<motor>,<F|R>,<pwm>,<mm_s>,<USED|STALL>   one measured point
     R,<motor>,<F|R>,<slope>,<intercept>,<r2>,<n>,<deadzone_pwm>,<mm_s_at_max>
-    V,<motor>,<F|R>,<target_mm_s>,<measured_mm_s>,<error_pct>
     DIR,<motor>,F,<pwm>,<mm_s>,<OK|FAILED>      DIR's post-commission self check
     ASK,...                                     DIR is waiting for F, B or X
-    CHECK,<motor>,F,<pwm>,<mm_s>,<OK|BACKWARDS|NO_ENCODER_MOTION>
     SIGN,<motor>,ENC,<sign>,MOT,<sign>
     TICKS,<left>,<right>
     INFO,... / WARN,... / ERR,... / ACK,...

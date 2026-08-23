@@ -5,9 +5,12 @@ fits it, so the feed-forward constants in
 `arduino_mini_base_controller/Config.h` come from data instead of a guess. It
 also commissions the two direction signs those constants depend on.
 
-It is a standalone tool: no IMU, no odometry, no PID, no ROS serial protocol.
-Flash it, calibrate, paste the constants it prints into the main firmware, then
-flash the main firmware back.
+It is a standalone tool that does exactly five things: drive the TB6612
+channels, run motors 1 and 2, work out which way each one turns, read the
+encoders, and print the measured points plus the fitted forward and reverse
+curves. No IMU, no odometry, no PID, no ROS serial protocol, no closed-loop
+anything. Flash it, calibrate, paste the constants it prints into the main
+firmware, then flash the main firmware back.
 
 Section 7 of the [repository README](../README.md) is the short version. This
 is the full reference.
@@ -155,19 +158,7 @@ const float FF_INTERCEPT_MM_S_REV[MOTOR_COUNT] = {-68.90f, -74.10f};
 
 `RESULT` reprints it at any time.
 
-**6. Verify.** Send `VERIFY`. It drives a few target speeds through the fresh
-fit, open loop, and reports how far off each lands:
-
-```text
-V,1,F,60.0,58.4,-2.7
-V,1,F,120.0,117.1,-2.4
-```
-
-Under about 10% is a good fit — that residual is what PID absorbs. Consistently
-larger errors mean the fit is describing something other than the motor; see
-troubleshooting below.
-
-**7. Re-flash the main firmware** with the pasted constants. Retune the wheel
+**6. Re-flash the main firmware** with the pasted constants. Retune the wheel
 PID afterwards if you had tuned it against the old feed-forward: the loop now
 starts from a much better guess, so the gains that used to be right are
 probably too hot.
@@ -179,12 +170,9 @@ probably too hot.
 | `CAL` | Calibrate both motors, both directions, then print the table and paste block. |
 | `CAL,<motor>` | Same for one motor (`1` = left, `2` = right). |
 | `SWEEP,<motor>[,R]` | One motor, one direction. `R` = reverse. Fits and stores that one direction. |
-| `VERIFY` / `VERIFY,<motor>` | Drive target speeds through the fitted constants and report the open-loop error. |
 | `RESULT` | Reprint the fit table and the paste block. |
-| `HOLD,<motor>,<pwm>[,R]` | Hold one PWM and stream the measured speed (max 20 s). Spot checks, and watching battery sag. |
 | `DIR` | Commission **both** direction signs for both wheels from one look at each. Spins a wheel at a fixed driver polarity, asks which way the robot rolled, derives `MOTOR_DIRECTION_SIGN` and `ENCODER_SIGN` from the answer, and confirms them. Session-only; the values are printed ready to paste. **Run this before `CAL`.** |
 | `DIR,<motor>` | Same for one wheel. Skips the both-wheels-together confirmation. |
-| `CHECK` | Drive each wheel forward through the current signs and report whether the encoder agrees: `OK`, `BACKWARDS`, or `NO_ENCODER_MOTION`. Four seconds. A consistency check on `DIR`'s answer, not a substitute for it — it cannot see the wheel. |
 | `SIGN` | Print the current commissioning signs for every wheel. |
 | `TICKS[,<seconds>]` | Motors off; stream raw encoder totals. Default 30 s, max 300. |
 | `STEP,<pwm_step>` | Sweep step size, 1–50. Default 10. |
@@ -197,8 +185,8 @@ probably too hot.
 
 Commands are case-insensitive and terminated by `\n`, `\r` or `:`.
 
-**Sending any character while a sweep, `VERIFY`, `HOLD` or `TICKS` is running
-aborts it and coasts the motors.** An aborted sweep stores no fit, so the
+**Sending any character while a sweep or `TICKS` is running aborts it and
+coasts the motors.** An aborted sweep stores no fit, so the
 previous result for that wheel and direction stays untouched.
 
 `DIR`'s probes are the one exception: they last under two seconds each and
@@ -213,12 +201,10 @@ re-upload.
 
 | Line | Fields |
 | --- | --- |
-| `C,...` | `motor, F\|R, pwm, mm_s, USED\|STALL\|HOLD` — one measured point |
+| `C,...` | `motor, F\|R, pwm, mm_s, USED\|STALL` — one measured point |
 | `R,...` | `motor, F\|R, slope, intercept, r2, samples, deadzone_pwm, mm_s_at_max_pwm` |
-| `V,...` | `motor, F\|R, target_mm_s, measured_mm_s, error_pct` |
 | `DIR,...` | `motor, F, pwm, mm_s, OK\|FAILED` — `DIR`'s post-commission self check |
 | `ASK,...` | `DIR` is waiting for `F`, `B` or `X` on the serial line |
-| `CHECK,...` | `motor, F, pwm, mm_s, OK\|BACKWARDS\|NO_ENCODER_MOTION` |
 | `SIGN,...` | `motor, ENC, sign, MOT, sign` — one row per wheel |
 | `TICKS,...` | `left, right` — raw counts since the command started |
 | `INFO,` / `WARN,` / `ERR,` / `ACK,` | progress, diagnostics, failures, completion |
@@ -297,7 +283,6 @@ for a full `CAL`. `CONFIG` prints the estimate.
 | `WARN,LOW_R2,<r2>,...` | Noisy or non-linear measurement | Longer `DWELL`, charged battery, check for mechanical binding |
 | `WARN,WHEELS_DIFFER_A_LOT,...` | Left and right slopes differ by more than 25% | Look for drag on the slow wheel; re-check `MEASURED_COUNTS_PER_REV` per wheel |
 | `0.000f /*NOT_CALIBRATED*/` in the paste block | That wheel/direction has no valid fit — the preceding `WARN,MISSING_FIT` lines name which | Fix the cause the `ERR,FIT_FAILED` line reported, then re-run. **Never paste a block containing `0.000f`** — the firmware treats a non-positive slope as "no feed-forward" and falls back to pure PID, so that wheel will be visibly slow |
-| `VERIFY` errors much larger than 10% | Battery sagged between the sweep and the check, or the fit was made at a different voltage | Recharge and re-run `CAL` |
 | All speeds off by a constant factor | Wrong `MEASURED_COUNTS_PER_REV` | Re-measure with `TICKS` |
 
 ### Which way is forward
@@ -379,5 +364,5 @@ robot wired to those signs, so paste both or neither, into
   measuring at the default 490 Hz would produce a fit the firmware could not
   use.
 
-Build footprint on an Uno: 18854 bytes of flash (58%) and 489 bytes of static
-RAM (24%).
+Build footprint on an Uno: 16278 bytes of flash (50%) and 431 bytes of static
+RAM (21%).

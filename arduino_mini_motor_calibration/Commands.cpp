@@ -57,13 +57,10 @@ void printConfig() {
 
 void printHelp() {
   Serial.println(F("CMD,DIR[,motor]            commission BOTH direction signs from one look"));
-  Serial.println(F("CMD,CHECK                  drive each wheel forward, check the encoder agrees"));
   Serial.println(F("CMD,SIGN                   print the commissioning signs"));
-  Serial.println(F("CMD,CAL[,motor]            calibrate (default: both motors, both directions)"));
+  Serial.println(F("CMD,CAL[,motor]            sweep and fit (default: both motors, both directions)"));
   Serial.println(F("CMD,SWEEP,motor[,R]        one motor, one direction"));
-  Serial.println(F("CMD,VERIFY[,motor]         open-loop check of the fitted constants"));
   Serial.println(F("CMD,RESULT                 reprint fits and the paste block"));
-  Serial.println(F("CMD,HOLD,motor,pwm[,R]     hold one PWM, stream speed"));
   Serial.println(F("CMD,TICKS[,seconds]        stream raw encoder counts"));
   Serial.println(F("CMD,STEP,pwm_step          set sweep step"));
   Serial.println(F("CMD,RANGE,min_pwm,max_pwm  set sweep range"));
@@ -107,9 +104,6 @@ static void processCommand(char *line) {
     }
     commissionDirections(index);
   }
-  else if (strcmp(command, "CHECK") == 0) {
-    runDirectionCheck();
-  }
   else if (strcmp(command, "SIGN") == 0) {
     printSigns();
   }
@@ -137,32 +131,8 @@ static void processCommand(char *line) {
     sweepAndFit((uint8_t)index, isReverseFlag(dirText));
     Serial.println(F("ACK,SWEEP_DONE"));
   }
-  else if (strcmp(command, "VERIFY") == 0) {
-    const int8_t index = parseOptionalMotor(strtok_r(NULL, ",", &savePtr));
-    if (index == -2) {
-      Serial.println(F("ERR,VERIFY_MOTOR_RANGE"));
-      return;
-    }
-    if (index >= 0) {
-      verifyMotor((uint8_t)index);
-    } else {
-      for (uint8_t i = 0; i < MOTOR_COUNT; ++i) verifyMotor(i);
-    }
-    Serial.println(F("ACK,VERIFY_DONE"));
-  }
   else if (strcmp(command, "RESULT") == 0) {
     printResultTable();
-  }
-  else if (strcmp(command, "HOLD") == 0) {
-    const int8_t index = parseOptionalMotor(strtok_r(NULL, ",", &savePtr));
-    char *pwmText = strtok_r(NULL, ",", &savePtr);
-    char *dirText = strtok_r(NULL, ",", &savePtr);
-    const int pwm = pwmText ? atoi(pwmText) : -1;
-    if (index < 0 || pwm < 0 || pwm > MAX_DRIVE_PWM) {
-      Serial.println(F("ERR,HOLD_FORMAT,HOLD,<motor>,<pwm>[,R]"));
-      return;
-    }
-    holdAndStream((uint8_t)index, (uint16_t)pwm, isReverseFlag(dirText), HOLD_MAX_MS);
   }
   else if (strcmp(command, "TICKS") == 0) {
     char *secondsText = strtok_r(NULL, ",", &savePtr);

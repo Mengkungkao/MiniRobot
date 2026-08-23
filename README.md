@@ -93,11 +93,11 @@ arduino_mini_motor_calibration/        bench sketch: measures and fits the
                                          shared-layer files above
   Config.h                             baud, fit thresholds, DIR and sweep
                                          settings
-  Direction.h/.cpp                     the session signs, DIR and CHECK
+  Direction.h/.cpp                     the session signs and DIR
   Measure.h/.cpp                       abort handling, one speed measurement,
-                                         HOLD, TICKS
+                                         TICKS
   Fit.h/.cpp                           least squares, results table, paste block
-  Sweep.h/.cpp                         the PWM sweep, CAL and VERIFY
+  Sweep.h/.cpp                         the PWM sweep and CAL
   Commands.h/.cpp                      serial command set, CONFIG, HELP
   README.md                            full reference for that sketch
   Calibration_results.md               log of a past CAL run
@@ -342,12 +342,13 @@ const float FF_INTERCEPT_MM_S_FWD[MOTOR_COUNT] = {-71.20f, -76.85f};
 ...
 ```
 
-Then send `VERIFY`: it drives a few target speeds through the fresh fit open
-loop and reports the error at each. Under ~10% is good; PID absorbs the rest.
-Send `HELP` for the rest of the commands (`TICKS` for counts-per-rev, `HOLD`
-for a single-point spot check, `CHECK` for a four-second re-test of the signs,
-`RANGE`/`STEP`/`DWELL`/`PASSES` to retune the sweep). Any character aborts a
-running sweep.
+Send `HELP` for the rest of the commands (`TICKS` for counts-per-rev,
+`RANGE`/`STEP`/`DWELL`/`PASSES` to retune the sweep, `RESULT` to reprint the
+paste block). Any character aborts a running sweep.
+
+The sketch stops there on purpose: it drives the motor channels, commissions
+the directions, reads the encoders and prints the curve. Checking the fit
+against a control law is the firmware's job, not the bench tool's.
 
 Re-flash the main firmware when you are done.
 
@@ -436,7 +437,7 @@ as the IDE defaults to):
 | Sketch | Flash (of 32256) | SRAM (of 2048) |
 | --- | --- | --- |
 | `arduino_mini_base_controller` | 27554 B (85%) | 1102 B (54%) |
-| `arduino_mini_motor_calibration` | 18854 B (58%) | 489 B (24%) |
+| `arduino_mini_motor_calibration` | 16278 B (50%) | 431 B (21%) |
 | `arduino_mini_imu_calibration` | 30326 B (94%) | 791 B (39%) |
 
 Splitting the firmware into modules cost nothing in SRAM. Duplicating the shared

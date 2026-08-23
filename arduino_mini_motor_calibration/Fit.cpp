@@ -10,8 +10,6 @@ void resetFitResults() {
     for (uint8_t d = 0; d < 2; ++d) {
       results[i][d].valid = false;
       results[i][d].samples = 0;
-      results[i][d].stalled = 0;
-      results[i][d].maxSpeedMMs = 0.0f;
     }
   }
 }

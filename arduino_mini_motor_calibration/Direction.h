@@ -37,10 +37,6 @@ void driveWheel(uint8_t index, bool reverse, uint16_t pwm);
 // turns forward" the same statement.
 void commissionDirections(int8_t onlyIndex);
 
-// Drive each wheel forward and confirm it measures positive. A consistency
-// check on the current signs, not a way to find them -- see Direction.cpp.
-void runDirectionCheck();
-
 // True when either sign differs from what MiniRobotGeometry.h was compiled with.
 bool signsOverridden();
 

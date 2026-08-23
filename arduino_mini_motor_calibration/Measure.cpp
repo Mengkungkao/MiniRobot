@@ -59,37 +59,6 @@ int32_t measureRawTicks(uint8_t index, bool pinsHigh, uint16_t pwm) {
   return ticks;
 }
 
-void holdAndStream(uint8_t index, uint16_t pwm, bool reverse, uint32_t durationMs) {
-  Serial.println(F("INFO,HOLD_START,SEND_ANY_CHARACTER_TO_STOP"));
-  driveWheel(index, reverse, pwm);
-  readEncoderAndResetAtomic(index);
-
-  const uint32_t start = millis();
-  uint32_t lastSample = millis();
-  while (millis() - start < durationMs) {
-    if (abortRequested()) break;
-    delay(5);
-    if (millis() - lastSample < 200) continue;
-
-    const int32_t ticks = readEncoderAndResetAtomic(index) * encoderSign[index];
-    const uint32_t elapsedMs = millis() - lastSample;
-    lastSample = millis();
-
-    const float speed = (ticks * MM_PER_COUNT[index]) * 1000.0f / (float)elapsedMs;
-    Serial.print(F("C,"));
-    Serial.print(index + 1);
-    Serial.print(reverse ? F(",R,") : F(",F,"));
-    Serial.print(pwm);
-    Serial.print(',');
-    Serial.print(speed * (reverse ? -1.0f : 1.0f), 2);
-    Serial.println(F(",HOLD"));
-  }
-
-  motor[index].coast();
-  readEncoderAndResetAtomic(index);
-  Serial.println(F("ACK,HOLD_DONE"));
-}
-
 // Every mm/s in this sketch and in the firmware is scaled by counts-per-rev, so
 // it is the first thing to get right.
 void streamTicks(uint32_t durationMs) {

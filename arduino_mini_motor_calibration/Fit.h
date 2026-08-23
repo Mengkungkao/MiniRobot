@@ -45,8 +45,6 @@ struct FitResult {
   float intercept;      // mm/s at PWM 0 (negative: the dead zone)
   float r2;
   uint16_t samples;     // points that made it into the fit
-  uint16_t stalled;     // points rejected as below MIN_VALID_SPEED_MM_S
-  float maxSpeedMMs;    // fastest speed actually measured
 };
 
 // results[motor][FWD|REV]

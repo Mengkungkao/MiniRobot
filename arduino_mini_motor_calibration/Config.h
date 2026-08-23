@@ -60,18 +60,6 @@ const int32_t DIR_MIN_TICKS = 20;
 const uint32_t ANSWER_TIMEOUT_MS = 120000UL;
 
 // -----------------------------------------------------------------------------
-// VERIFY
-// -----------------------------------------------------------------------------
-
-// Target speeds VERIFY drives, in mm/s.
-const float VERIFY_SPEEDS_MM_S[] = {60.0f, 120.0f, 180.0f, 240.0f};
-const uint8_t VERIFY_SPEED_COUNT =
-  sizeof(VERIFY_SPEEDS_MM_S) / sizeof(VERIFY_SPEEDS_MM_S[0]);
-
-// Safety ceiling for HOLD, which otherwise runs a motor indefinitely.
-const uint32_t HOLD_MAX_MS = 20000UL;
-
-// -----------------------------------------------------------------------------
 // Runtime-adjustable sweep settings (STEP / RANGE / DWELL / PASSES)
 // -----------------------------------------------------------------------------
 // Defined in Sweep.cpp.
