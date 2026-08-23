@@ -146,6 +146,10 @@ scripts/
                                         and which is the LiDAR, then writes and
                                         installs the udev rules for both
   99-mini-robot.rules.example         udev rules template for stable serial ports
+  robot_autostart.sh                  optional: turn boot-time autostart of
+                                        robot.launch.py on or off (section 11)
+  robot_bringup.sh                    what that systemd unit runs; sources ROS
+                                        and waits for the serial ports
 ```
 
 ## 4. Wiring
@@ -606,6 +610,60 @@ ros2 topic echo /scan
 ros2 run tf2_tools view_frames
 ```
 
+### Optional: start it automatically at boot
+
+The stack can also come up on its own when the Pi powers on, as a systemd
+unit. It is entirely opt-in: nothing is installed until you ask for it, and
+while it is off everything above behaves exactly as it did before.
+
+On the Pi:
+
+```bash
+bash scripts/robot_autostart.sh on
+```
+
+That writes `/etc/systemd/system/mini-robot.service` (generated per machine, so
+it is not tracked in the repo), starts it now, and enables it for every later
+boot. Turn it off again with:
+
+```bash
+bash scripts/robot_autostart.sh off
+```
+
+| command | effect |
+| --- | --- |
+| `on` | run now **and** at every boot |
+| `off` | stop now and do not start at boot |
+| `start` / `stop` / `restart` | this boot only; the boot setting is unchanged |
+| `status` | what is installed, enabled and running |
+| `logs [-f]` | the unit's journal, i.e. the launch output |
+| `preview` | print the unit file without installing anything |
+| `install` | write the unit but leave it off |
+| `uninstall` | remove the unit; nothing else is touched |
+
+The unit runs `scripts/robot_bringup.sh`, which exists because systemd gives
+its services a non-interactive shell that never reads `~/.bashrc` (section 21).
+The wrapper sources `/opt/ros/humble/setup.bash` and
+`~/ros2_ws/install/setup.bash` explicitly, sets `ROS_DOMAIN_ID`, waits up to
+30 s for `/dev/arduino_mini` and `/dev/coin_d6` to appear (udev creates those
+symlinks a moment after the adapters enumerate), and then execs the same
+`ros2 launch mini_robot robot.launch.py` you would run by hand.
+
+Two behaviours are worth knowing:
+
+- **It stands aside for a hand-started stack.** If `serial_bridge` or
+  `coin_d6_lidar` is already running when the unit starts, it says so in the
+  journal and exits cleanly instead of fighting for the serial ports -- two
+  processes cannot share them. So with autostart on, run `off` (or `stop`)
+  before launching by hand.
+- **It brings the nodes up, it does not drive.** Nothing publishes a velocity
+  command at boot, so the wheels stay still; the watchdog and the latched
+  e-stop of section 20 are unchanged. The LiDAR motor does start spinning.
+
+Everything in the unit is per-machine (user, repo path, workspace,
+`ROS_DOMAIN_ID`), so after moving the repo re-run `robot_autostart.sh on`
+rather than editing `/etc/systemd/system/mini-robot.service` by hand.
+
 ## 12. Configure ROS2 networking
 
 Both the Pi and workstation must:
@@ -1063,7 +1121,8 @@ source ~/ros2_ws/install/setup.bash
 
 which is exactly what `scripts/ros_network_env.sh` does. A systemd unit that
 starts `robot.launch.py` at boot needs those two lines in a wrapper script, not
-a dependency on `~/.bashrc`.
+a dependency on `~/.bashrc`; that wrapper is `scripts/robot_bringup.sh`, which
+the optional autostart unit runs (section 11).
 
 ### The workstation cannot see the robot's topics
 
