@@ -61,6 +61,7 @@ void printConfig() {
 
 void printHelp() {
   Serial.println(F("CMD,CPR[,turns]            hand-spin each wheel, count ticks per revolution"));
+  Serial.println(F("CMD,ROT[,turns]            drive that many turns back, check the mark comes round"));
   Serial.println(F("CMD,DIR[,motor]            commission BOTH direction signs from one look"));
   Serial.println(F("CMD,SIGN                   print the commissioning signs"));
   Serial.println(F("CMD,CAL[,motor]            sweep and fit (default: both motors, both directions)"));
@@ -119,6 +120,25 @@ static void processCommand(char *line) {
       return;
     }
     measureCountsPerRev(index, (uint8_t)turns);
+  }
+  else if (strcmp(command, "ROT") == 0) {
+    char *motorText = strtok_r(NULL, ",", &savePtr);
+    char *turnsText = strtok_r(NULL, ",", &savePtr);
+    // Same argument shape as CPR: a lone number is a turn count, not a motor.
+    int8_t index = -1;
+    int turns = 1;
+    if (motorText && turnsText) {
+      index = parseOptionalMotor(motorText);
+      turns = atoi(turnsText);
+    } else if (motorText) {
+      turns = atoi(motorText);
+    }
+    if (index == -2 || turns < 1 || turns > ROT_MAX_TURNS) {
+      Serial.print(F("ERR,ROT_FORMAT,ROT[,turns],TURNS_1_"));
+      Serial.println(ROT_MAX_TURNS);
+      return;
+    }
+    rotateTurns(index, (uint8_t)turns);
   }
   else if (strcmp(command, "DIR") == 0) {
     const int8_t index = parseOptionalMotor(strtok_r(NULL, ",", &savePtr));

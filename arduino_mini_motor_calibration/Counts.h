@@ -29,6 +29,11 @@ void countsBegin();
 // full turns, count the ticks, and divide. onlyIndex < 0 does both wheels.
 void measureCountsPerRev(int8_t onlyIndex, uint8_t turns);
 
+// Drive each wheel countsPerRev * turns counts under power and brake, so the
+// operator can see whether that many counts really is a whole revolution.
+// onlyIndex < 0 does both wheels.
+void rotateTurns(int8_t onlyIndex, uint8_t turns);
+
 // True when either wheel differs from what MiniRobotGeometry.h was compiled with.
 bool countsOverridden();
 

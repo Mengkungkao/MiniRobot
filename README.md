@@ -93,7 +93,7 @@ arduino_mini_motor_calibration/        bench sketch: measures and fits the
                                          shared-layer files above
   Config.h                             baud, fit thresholds, CPR, DIR and
                                          sweep settings
-  Counts.h/.cpp                        the session counts-per-rev and CPR
+  Counts.h/.cpp                        the session counts-per-rev, CPR, ROT
   Direction.h/.cpp                     the session signs and DIR
   Measure.h/.cpp                       abort handling, one speed measurement
   Fit.h/.cpp                           least squares, results table, paste block
@@ -323,6 +323,12 @@ in the sketch and in the firmware — get it wrong and every speed is wrong by
 exactly that factor, while telemetry, `/odom` and the PID all agree the robot
 is on target. Nothing downstream can detect it.
 
+Check it with `ROT`, which does the same sum backwards: it drives what the
+sketch now believes is exactly one turn and brakes. Line a mark on the tyre up
+with a mark on the chassis, send `ROT`, and the mark should come back round.
+Short means the count is too low, past means too high; `ROT,5` magnifies a
+small error into an obvious one.
+
 Then send:
 
 ```text
@@ -449,7 +455,7 @@ as the IDE defaults to):
 | Sketch | Flash (of 32256) | SRAM (of 2048) |
 | --- | --- | --- |
 | `arduino_mini_base_controller` | 27554 B (85%) | 1102 B (54%) |
-| `arduino_mini_motor_calibration` | 18652 B (58%) | 437 B (21%) |
+| `arduino_mini_motor_calibration` | 20756 B (64%) | 441 B (22%) |
 | `arduino_mini_imu_calibration` | 30326 B (94%) | 791 B (39%) |
 
 Splitting the firmware into modules cost nothing in SRAM. Duplicating the shared
@@ -887,6 +893,7 @@ actually used -- in `arduino_mini_motor_calibration/`, at 500000 baud:
 
 ```text
 CPR
+ROT
 DIR
 RANGE,8,60
 STEP,2

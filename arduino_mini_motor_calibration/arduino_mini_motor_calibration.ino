@@ -39,7 +39,7 @@
 
   Sketch layout (the IDE compiles every .cpp/.h in this folder):
     Config.h            baud, fit thresholds, CPR, DIR and sweep settings
-    Counts.h/.cpp       the session counts-per-rev and CPR
+    Counts.h/.cpp       the session counts-per-rev, CPR and ROT
     Direction.h/.cpp    the session signs and DIR
     Measure.h/.cpp      abort handling, one speed measurement
     Fit.h/.cpp          least squares, the results table, the paste block
@@ -75,6 +75,18 @@
      wheel, press Enter. Default is 5 turns; more is better, because the error
      is how precisely you stop on the mark and that divides down. CPR,10 for a
      careful job, CPR,1 for a quick re-check.
+
+     Then check it:  ROT
+     which does the same sum backwards -- it drives what the sketch now
+     believes is exactly one turn and brakes. Line the marks up, send it, and
+     watch: the mark should come back round to where it started. Short means
+     the count is too low, past means too high. ROT,5 turns the error into
+     something you cannot miss.
+
+     This is the check that catches a count wrong by a clean factor -- a
+     miscounted hand turn, an x2/x4 decoding mix-up, a gear ratio off by one
+     stage. Those all produce a self-consistent number that CPR reports
+     happily and every speed downstream is then scaled by.
   5. Run:  DIR
      Thirty seconds, and it is not optional.
 
@@ -107,16 +119,19 @@
      Never paste a block containing 0.000f -- that wheel has no fit.
 
   Sending any character while a sweep is running aborts it and coasts the
-  motors. Bare line endings do not count, so a terminal that appends CR+LF
-  cannot abort the very run it just started. CPR and DIR are the exception:
-  they are asking you questions, so they read what you type as the answer.
-  Abort either by answering X.
+  motors, and so does a running ROT. Bare line endings do not count, so a
+  terminal that appends CR+LF cannot abort the very run it just started. CPR
+  and DIR are the exception: they are asking you questions, so they read what
+  you type as the answer. Abort either by answering X.
 
   COMMANDS
   ------------------------------------------------------------
     CPR                        hand-spin both wheels, count ticks per revolution
     CPR,<turns>                ... asking for that many full turns (default 5)
     CPR,<motor>,<turns>        ... for one wheel only
+    ROT                        drive one turn back and see if the mark returns
+    ROT,<turns>                ... that many turns (default 1)
+    ROT,<motor>,<turns>        ... for one wheel only
     DIR                        commission both signs from one look per wheel
     DIR,<motor>                ... for one wheel only
     SIGN                       print the commissioning signs
@@ -142,6 +157,7 @@
     CPR,LIVE,<left>,<right>                     running totals while you spin
     CPR,<motor>,TICKS,<n>,TURNS,<n>,COUNTS_PER_REV,<n>
     CPR,<motor>,COUNTS_PER_REV,<n>,MM_PER_COUNT,<n>
+    ROT,<motor>,TARGET,<n>,ACTUAL,<n>,STOP_ERROR,<n>,DEG,<n>
     INFO,... / WARN,... / ERR,... / ACK,...
 
   The C rows are plain CSV, so you can also capture them and fit offline if you

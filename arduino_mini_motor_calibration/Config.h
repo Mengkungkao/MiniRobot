@@ -47,6 +47,33 @@ const int32_t CPR_MIN_TICKS = 50;
 const uint32_t CPR_TIMEOUT_MS = 300000UL;
 
 // -----------------------------------------------------------------------------
+// ROT -- play the counts back under power
+// -----------------------------------------------------------------------------
+//
+// Drives a wheel exactly countsPerRev * turns counts and brakes, so the
+// operator can see whether that many counts really is a whole revolution.
+
+// Main travel, then a crawl for the last stretch so the brake lands close to
+// the target instead of sailing past it. The wheel is already turning by the
+// time it drops to the crawl, so the low PWM only has to sustain motion, not
+// break stiction.
+const uint16_t ROT_PWM = 50;
+const uint16_t ROT_CREEP_PWM = 15;
+
+// Fraction of one revolution spent crawling.
+const float ROT_CREEP_FRACTION = 0.15f;
+
+// Let the brake finish before reading the final count.
+const uint16_t ROT_SETTLE_MS = 400;
+
+// No new counts for this long means the wheel is jammed or the encoder is dead.
+// Far more useful than a fixed overall timeout, which would sit there for
+// twenty seconds saying nothing.
+const uint32_t ROT_STALL_MS = 2000UL;
+
+const uint8_t ROT_MAX_TURNS = 20;
+
+// -----------------------------------------------------------------------------
 // DIR -- direction commissioning
 // -----------------------------------------------------------------------------
 //

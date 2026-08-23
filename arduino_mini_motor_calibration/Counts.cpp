@@ -216,3 +216,158 @@ void measureCountsPerRev(int8_t onlyIndex, uint8_t turns) {
   printGeometryPasteBlock();
   Serial.println(allOk ? F("ACK,CPR_DONE") : F("WARN,CPR_INCOMPLETE"));
 }
+
+// -----------------------------------------------------------------------------
+// ROT
+// -----------------------------------------------------------------------------
+//
+// CPR asks the operator to turn the wheel a whole number of turns and counts
+// the ticks. ROT does the same sum backwards: it drives what the sketch now
+// believes is a whole number of turns and stops, so the operator can see
+// whether the mark comes back round.
+//
+// That is the only way to catch a counts-per-rev that is wrong by a clean
+// factor -- a miscounted hand turn, an x2/x4 decoding mix-up, a gear ratio off
+// by one stage. All of those produce a perfectly self-consistent number that
+// CPR will happily report and every speed downstream will be scaled by.
+//
+// Note what the printed STOP_ERROR is and is not: it is how far past the target
+// COUNT the wheel coasted before the brake caught it, which measures this
+// command's own stopping accuracy. It says nothing about whether the count is
+// right. That verdict is visual, and it has to be.
+
+static bool waitForEnter(const __FlashStringHelper *prompt) {
+  while (Serial.available() > 0) Serial.read();
+  Serial.println(prompt);
+  Serial.println(F("ASK,PRESS_ENTER_WHEN_READY,X_THEN_ENTER_TO_ABORT"));
+
+  const uint32_t start = millis();
+  char firstChar = 0;
+  while ((millis() - start) < CPR_TIMEOUT_MS) {
+    while (Serial.available() > 0) {
+      char c = (char)Serial.read();
+      if (c >= 'a' && c <= 'z') c -= ('a' - 'A');
+      if (c == '\n' || c == '\r') return firstChar != 'X';
+      if (firstChar == 0) firstChar = c;
+    }
+    delay(5);
+  }
+  Serial.println(F("WARN,ROT_TIMEOUT_NO_ANSWER"));
+  return false;
+}
+
+static bool rotateOneWheel(uint8_t index, uint8_t turns) {
+  const int32_t target = (int32_t)(countsPerRev[index] * (float)turns + 0.5f);
+  if (target < 1) {
+    Serial.println(F("ERR,ROT_TARGET_ZERO,RUN,CPR,FIRST"));
+    return false;
+  }
+  const int32_t creep = (int32_t)(countsPerRev[index] * ROT_CREEP_FRACTION);
+
+  Serial.print(F("INFO,ROT_RUN,MOTOR_"));
+  printMotorLabel(index);
+  Serial.print(F(",TURNS,"));
+  Serial.print(turns);
+  Serial.print(F(",TARGET_COUNTS,"));
+  Serial.println(target);
+
+  // Counted raw, with no signs applied, so ROT works before DIR has run and
+  // whichever way the wheel happens to turn.
+  readEncoderAndResetAtomic(index);
+  int32_t total = 0;
+  int32_t lastTotal = 0;
+  uint16_t pwm = 0;
+  uint32_t lastProgress = millis();
+  bool stalled = false;
+  bool aborted = false;
+
+  while (labs(total) < target) {
+    if (abortRequested()) {
+      aborted = true;
+      break;
+    }
+
+    const int32_t remaining = target - labs(total);
+    const uint16_t want = (remaining > creep) ? ROT_PWM : ROT_CREEP_PWM;
+    if (want != pwm) {
+      pwm = want;
+      driveRawPolarity(index, true, pwm);
+    }
+
+    delay(2);
+    total += readEncoderAndResetAtomic(index);
+
+    if (total != lastTotal) {
+      lastTotal = total;
+      lastProgress = millis();
+    } else if ((millis() - lastProgress) > ROT_STALL_MS) {
+      stalled = true;
+      break;
+    }
+  }
+
+  motor[index].brake();
+  delay(ROT_SETTLE_MS);
+  total += readEncoderAndResetAtomic(index);
+  motor[index].coast();
+
+  if (aborted) {
+    Serial.println(F("WARN,ROT_ABORTED"));
+    return false;
+  }
+  if (stalled) {
+    Serial.print(F("ERR,ROT_NO_PROGRESS,MOTOR_"));
+    printMotorLabel(index);
+    Serial.print(F(",counts="));
+    Serial.println(labs(total));
+    Serial.println(F("INFO,THE_WHEEL_IS_JAMMED_OR_THE_ENCODER_STOPPED_REPORTING"));
+    return false;
+  }
+
+  const int32_t actual = labs(total);
+  const int32_t stopError = actual - target;
+
+  Serial.print(F("ROT,"));
+  Serial.print(index + 1);
+  Serial.print(F(",TARGET,"));
+  Serial.print(target);
+  Serial.print(F(",ACTUAL,"));
+  Serial.print(actual);
+  Serial.print(F(",STOP_ERROR,"));
+  Serial.print(stopError);
+  Serial.print(F(",DEG,"));
+  Serial.println(360.0f * (float)stopError / countsPerRev[index], 1);
+  return true;
+}
+
+void rotateTurns(int8_t onlyIndex, uint8_t turns) {
+  Serial.println(F("WARN,ROT_DRIVES_THE_MOTORS,ROBOT_ON_BLOCKS_WHEELS_SPINNING_FREE"));
+  if (!waitForEnter(F("INFO,ROT,LINE_A_MARK_ON_EACH_TYRE_UP_WITH_A_MARK_ON_THE_CHASSIS"))) {
+    motorsCoastAll();
+    Serial.println(F("WARN,ROT_ABORTED"));
+    return;
+  }
+
+  const uint8_t first = (onlyIndex < 0) ? 0 : (uint8_t)onlyIndex;
+  const uint8_t last = (onlyIndex < 0) ? (MOTOR_COUNT - 1) : (uint8_t)onlyIndex;
+
+  bool allOk = true;
+  for (uint8_t i = first; i <= last; ++i) {
+    if (!rotateOneWheel(i, turns)) allOk = false;
+    motorsCoastAll();
+    if (!sleepMs(600)) {
+      Serial.println(F("WARN,ROT_ABORTED"));
+      return;
+    }
+  }
+
+  motorsCoastAll();
+  if (allOk) {
+    Serial.println(F("INFO,STOP_ERROR_IS_THIS_COMMANDS_OWN_BRAKING_OVERSHOOT,NOT_A_COUNT_ERROR"));
+    Serial.println(F("INFO,THE_VERDICT_IS_VISUAL,DID_EACH_MARK_COME_BACK_ROUND"));
+    Serial.println(F("INFO,STOPPED_SHORT,COUNTS_PER_REV_IS_TOO_LOW"));
+    Serial.println(F("INFO,WENT_PAST,COUNTS_PER_REV_IS_TOO_HIGH"));
+    Serial.println(F("INFO,EITHER_WAY_RERUN,CPR,WITH_MORE_TURNS"));
+  }
+  Serial.println(allOk ? F("ACK,ROT_DONE") : F("WARN,ROT_INCOMPLETE"));
+}

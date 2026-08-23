@@ -133,6 +133,43 @@ decoded x2 (channel A on CHANGE, so two counts per encoder cycle), behind a
 1:20 gearbox — 13 x 2 x 20 = 520. That arithmetic is a prediction; `CPR` is the
 measurement.
 
+**Then check it with `ROT`.** This does the same sum backwards: it drives what
+the sketch now believes is exactly one turn and brakes, so you can see whether
+that many counts really is a whole revolution. Line the marks up, send `ROT`,
+and watch the wheel:
+
+```text
+WARN,ROT_DRIVES_THE_MOTORS,ROBOT_ON_BLOCKS_WHEELS_SPINNING_FREE
+INFO,ROT,LINE_A_MARK_ON_EACH_TYRE_UP_WITH_A_MARK_ON_THE_CHASSIS
+ASK,PRESS_ENTER_WHEN_READY,X_THEN_ENTER_TO_ABORT
+INFO,ROT_RUN,MOTOR_1(LEFT),TURNS,1,TARGET_COUNTS,520
+ROT,1,TARGET,520,ACTUAL,526,STOP_ERROR,6,DEG,4.2
+```
+
+| The mark… | Means | Fix |
+| --- | --- | --- |
+| comes back round | the count is right | nothing |
+| stops short | `MEASURED_COUNTS_PER_REV` too **low** | re-run `CPR` with more turns |
+| goes past | `MEASURED_COUNTS_PER_REV` too **high** | re-run `CPR` with more turns |
+
+`ROT,5` multiplies the error by five and turns a discrepancy you might argue
+about into one you cannot miss. `ROT,<motor>,<turns>` does one wheel.
+
+Read `STOP_ERROR` carefully: it is how far past the target **count** the wheel
+coasted before the brake caught it, so it measures this command's own stopping
+accuracy — a few degrees is normal and healthy. It says nothing about whether
+the count is right. That verdict is visual, and it has to be: the encoder
+cannot see the tyre.
+
+This is the check that catches a count wrong by a clean factor — a miscounted
+hand turn, an x2/x4 decoding mix-up, a gear ratio off by one stage. Every one
+of those produces a perfectly self-consistent number that `CPR` reports
+happily, and that every speed in the fit is then scaled by.
+
+`ROT` drives raw pin polarity with no signs applied, so it works before `DIR`
+has run and whichever way the wheel happens to turn — only the magnitude
+matters here.
+
 **3. Commission the direction signs.** Send `DIR`. It takes about thirty
 seconds and it is not optional — see [§8](#which-way-is-forward) for what goes
 wrong without it.
@@ -205,6 +242,8 @@ probably too hot.
 | `RESULT` | Reprint the fit table and the paste block. |
 | `CPR[,<turns>]` | Hand-spin measurement of encoder counts per wheel revolution, both wheels, motors off. Default 5 turns, max 20. Session-only; printed ready to paste. **Run this first.** |
 | `CPR,<motor>,<turns>` | Same for one wheel. |
+| `ROT[,<turns>]` | Drive `countsPerRev × turns` counts under power and brake, so you can see whether the mark comes back round. Default 1 turn, max 20. The check that `CPR`'s answer is real. |
+| `ROT,<motor>,<turns>` | Same for one wheel. |
 | `DIR` | Commission **both** direction signs for both wheels from one look at each. Spins a wheel at a fixed driver polarity, asks which way the robot rolled, derives `MOTOR_DIRECTION_SIGN` and `ENCODER_SIGN` from the answer, and confirms them. Session-only; the values are printed ready to paste. **Run this before `CAL`.** |
 | `DIR,<motor>` | Same for one wheel. Skips the both-wheels-together confirmation. |
 | `SIGN` | Print the current commissioning signs for every wheel. |
@@ -218,8 +257,8 @@ probably too hot.
 
 Commands are case-insensitive and terminated by `\n`, `\r` or `:`.
 
-**Sending any character while a sweep is running aborts it and coasts the
-motors.** An aborted sweep stores no fit, so the
+**Sending any character while a sweep or `ROT` is running aborts it and coasts
+the motors.** An aborted sweep stores no fit, so the
 previous result for that wheel and direction stays untouched.
 
 `CPR` and `DIR` are the exception: they are asking you questions, so they read
@@ -239,6 +278,7 @@ re-upload.
 | `ASK,...` | waiting for an operator answer on the serial line |
 | `CPR,LIVE,...` | `left, right` — running raw totals while you turn a wheel |
 | `CPR,...` | `motor, TICKS, n, TURNS, n, COUNTS_PER_REV, n` — one wheel's result |
+| `ROT,...` | `motor, TARGET, n, ACTUAL, n, STOP_ERROR, n, DEG, n` |
 | `SIGN,...` | `motor, ENC, sign, MOT, sign` — one row per wheel |
 | `INFO,` / `WARN,` / `ERR,` / `ACK,` | progress, diagnostics, failures, completion |
 
@@ -320,6 +360,8 @@ for a full `CAL`. `CONFIG` prints the estimate.
 | `ERR,CPR_NO_COUNTS,...` | The wheel turned but the encoder netted near zero, or it never turned | Channel B floating or miswired (left `D6`, right `D11`); if the *other* column moved instead, the two encoders are swapped |
 | `WARN,CPR_CROSSTALK,...` | The other wheel counted too | Encoders cross-wired, or the wrong wheel was turned |
 | `WARN,WHEELS_SHOULD_MATCH,...` | The two wheels measured more than 5% apart | Same part, same gearbox — one count is wrong. Re-run `CPR` with more turns and stop precisely on the mark |
+| `ROT` stops short or overshoots the mark | `MEASURED_COUNTS_PER_REV` is too low / too high | Re-run `CPR` with more turns; use `ROT,5` to magnify what is left |
+| `ERR,ROT_NO_PROGRESS,...` | The wheel stopped counting mid-rotation | Jammed wheel, flat battery, or the encoder dropped out — check `STBY` and the encoder wiring |
 
 ### Which way is forward
 
@@ -400,5 +442,5 @@ robot wired to those signs, so paste both or neither, into
   measuring at the default 490 Hz would produce a fit the firmware could not
   use.
 
-Build footprint on an Uno: 18652 bytes of flash (58%) and 437 bytes of static
-RAM (21%).
+Build footprint on an Uno: 20756 bytes of flash (64%) and 441 bytes of static
+RAM (22%).
