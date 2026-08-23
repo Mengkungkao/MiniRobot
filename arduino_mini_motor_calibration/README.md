@@ -437,6 +437,14 @@ robot wired to those signs, so paste both or neither, into
 - **Least squares runs streaming**, Welford-style over the means, variances and
   covariance. No sample array — the Uno has 2 KB of SRAM — and no precision
   loss from accumulating large raw sums in 32-bit float.
+- **Four things are called "direction"** in the source, and three of them are
+  numbers. If you edit the sketch, read the block at the top of `Config.h`
+  first: `bool reverse` is what was commanded, `dirSlot` (`FWD`/`REV`) is only
+  ever an array index, the sign of a speed says which way the robot actually
+  moved, and `motorSign`/`encoderSign` are per-robot wiring corrections that are
+  `+1`/`-1` purely by coincidence. Converting between the first two goes through
+  `dirSlotFor()` / `slotIsReverse()`, and `static_assert`s refuse to build if the
+  slots stop lining up with `bool reverse` — the results array indexes on that.
 - **PWM runs at ~31.4 kHz** (Timer1, prescaler 1), the same as the main
   firmware. PWM frequency changes the effective torque at a given duty, so
   measuring at the default 490 Hz would produce a fit the firmware could not

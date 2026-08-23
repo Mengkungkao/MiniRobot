@@ -63,7 +63,7 @@ void sweepAndFit(uint8_t index, bool reverse) {
     return;
   }
 
-  const uint8_t dirSlot = reverse ? REV : FWD;
+  const uint8_t dirSlot = dirSlotFor(reverse);
   FitResult &out = results[index][dirSlot];
 
   Serial.print(F("INFO,SWEEP_START,MOTOR_"));

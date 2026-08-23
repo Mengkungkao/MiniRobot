@@ -47,8 +47,9 @@ struct FitResult {
   uint16_t samples;     // points that made it into the fit
 };
 
-// results[motor][FWD|REV]
-extern FitResult results[MOTOR_COUNT][2];
+// results[motor][FWD|REV] -- index it with dirSlotFor(reverse), never with a
+// bare bool or a hand-written 0/1.
+extern FitResult results[MOTOR_COUNT][DIR_SLOT_COUNT];
 
 // Clear every stored fit. Call once from setup().
 void resetFitResults();

@@ -120,6 +120,53 @@ extern uint8_t sweepPasses;    // 2 = ascending then descending
 // before it wastes a minute.
 const uint16_t MIN_SWEEP_STEPS = 4;
 
-// Direction slots used to index the results table.
+// -----------------------------------------------------------------------------
+// Direction -- and the four different things that word means in this sketch
+// -----------------------------------------------------------------------------
+//
+// Four encodings of "direction" coexist here. They are easy to confuse because
+// three of them are numbers and two of those are +1/-1:
+//
+//   1. bool reverse        WHAT WAS ASKED FOR. false = forward, true = reverse.
+//                          Travels down through driveWheel() and
+//                          measureSpeedMMs() to the driver pins.
+//
+//   2. uint8_t dirSlot     WHICH RESULTS SLOT. FWD = 0, REV = 1. Never
+//                          arithmetic, never a sign -- purely an index into
+//                          results[motor][DIR_SLOT_COUNT].
+//
+//   3. sign of a speed     WHICH WAY THE ROBOT ACTUALLY WENT, in the robot
+//                          frame: positive is forward no matter what was
+//                          commanded. measureSpeedMMs() returns this, and
+//                          sweepAndFit() multiplies it by its own +1/-1
+//                          directionSign to get a magnitude along the command.
+//
+//   4. int8_t motorSign    NOT DIRECTIONS AT ALL. These are per-robot wiring
+//      int8_t encoderSign  corrections, fixed for a given machine, and they are
+//                          +1/-1 like (3) purely by coincidence. Multiplying a
+//                          speed by one of these is meaningful; multiplying a
+//                          dirSlot by one is not. See Direction.h.
+//
+// (2) is laid out so that dirSlot == (uint8_t)reverse, which makes converting
+// between (1) and (2) free. That is an invariant the results array leans on,
+// not a coincidence to rely on quietly, so it is asserted below and every
+// conversion goes through the helpers rather than being written out by hand.
 const uint8_t FWD = 0;
 const uint8_t REV = 1;
+const uint8_t DIR_SLOT_COUNT = 2;
+
+static_assert(FWD == 0 && REV == 1,
+              "dirSlot indexes results[][DIR_SLOT_COUNT] as {FWD, REV}");
+static_assert(DIR_SLOT_COUNT == REV + 1,
+              "one results slot per direction, no more and no fewer");
+static_assert(FWD == (uint8_t)false && REV == (uint8_t)true,
+              "dirSlotFor() and the results array rely on the slots lining up "
+              "with bool reverse");
+
+// bool reverse -> results slot.
+inline uint8_t dirSlotFor(bool reverse) { return reverse ? REV : FWD; }
+
+// results slot -> was that the reverse sweep? The single predicate behind every
+// F/R letter this sketch prints, so a row cannot be labelled one way and stored
+// the other.
+inline bool slotIsReverse(uint8_t dirSlot) { return dirSlot == REV; }

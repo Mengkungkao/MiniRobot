@@ -84,4 +84,4 @@ const int8_t ENCODER_SIGN[MOTOR_COUNT] = {1, -1};
 // encoder above, and reported motor 2 as WHEEL_MEASURED_BACKWARDS through both
 // sweeps (arduino_mini_motor_calibration/Calibration_results.md). That report
 // says a sign is wrong somewhere in the channel; it cannot say which.
-const int8_t MOTOR_DIRECTION_SIGN[MOTOR_COUNT] = {1, -1};
+const int8_t MOTOR_DIRECTION_SIGN[MOTOR_COUNT] = {1, 1};

@@ -4,11 +4,11 @@
 #include "Direction.h"
 #include "Measure.h"
 
-FitResult results[MOTOR_COUNT][2];
+FitResult results[MOTOR_COUNT][DIR_SLOT_COUNT];
 
 void resetFitResults() {
   for (uint8_t i = 0; i < MOTOR_COUNT; ++i) {
-    for (uint8_t d = 0; d < 2; ++d) {
+    for (uint8_t d = 0; d < DIR_SLOT_COUNT; ++d) {
       results[i][d].valid = false;
       results[i][d].samples = 0;
     }
@@ -27,7 +27,7 @@ void printFitRow(uint8_t index, uint8_t dirSlot) {
 
   Serial.print(F("R,"));
   Serial.print(index + 1);
-  Serial.print(dirSlot == REV ? F(",R,") : F(",F,"));
+  Serial.print(slotIsReverse(dirSlot) ? F(",R,") : F(",F,"));
   Serial.print(r.slope, 4);
   Serial.print(',');
   Serial.print(r.intercept, 2);
@@ -96,12 +96,12 @@ static void printConstantsBlock() {
   // which wheel and which direction did not produce a line.
   bool complete = true;
   for (uint8_t i = 0; i < MOTOR_COUNT; ++i) {
-    for (uint8_t d = 0; d < 2; ++d) {
+    for (uint8_t d = 0; d < DIR_SLOT_COUNT; ++d) {
       if (results[i][d].valid) continue;
       complete = false;
       Serial.print(F("WARN,MISSING_FIT,MOTOR_"));
       printMotorLabel(i);
-      Serial.println(d == REV ? F(",REVERSE") : F(",FORWARD"));
+      Serial.println(slotIsReverse(d) ? F(",REVERSE") : F(",FORWARD"));
     }
   }
   if (!complete) {
@@ -132,7 +132,7 @@ void printResultTable() {
   Serial.println();
   Serial.println(F("R,motor,dir,slope,intercept,r2,samples,deadzone_pwm,mm_s_at_max_pwm"));
   for (uint8_t i = 0; i < MOTOR_COUNT; ++i) {
-    for (uint8_t d = 0; d < 2; ++d) printFitRow(i, d);
+    for (uint8_t d = 0; d < DIR_SLOT_COUNT; ++d) printFitRow(i, d);
   }
   printConstantsBlock();
 }
