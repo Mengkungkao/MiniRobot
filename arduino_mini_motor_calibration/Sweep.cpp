@@ -42,7 +42,7 @@ static void explainFitFailure(uint8_t index, uint16_t used, uint16_t stalled,
     // Net zero counts with the motor energised -- see commissionWheel() in
     // Direction.cpp for why channel B is the usual suspect.
     Serial.println(F("INFO,CAUSE,NO_ENCODER_MOTION"));
-    Serial.println(F("INFO,FIX,CHECK_ENCODER_A_AND_B_WIRING_THEN_RUN,TICKS,20"));
+    Serial.println(F("INFO,FIX,CHECK_ENCODER_A_AND_B_WIRING_THEN_RUN,CPR"));
   } else if (sawBackwards) {
     Serial.println(F("INFO,CAUSE,WHEEL_MEASURED_BACKWARDS"));
     Serial.println(F("INFO,FIX,RUN,DIR,IT_SETS_BOTH_SIGNS_FROM_ONE_LOOK_AT_THE_WHEEL"));

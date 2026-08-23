@@ -4,6 +4,7 @@
 #include "MiniRobotGeometry.h"
 #include "MiniRobotMotors.h"
 
+#include "Counts.h"
 #include "Measure.h"
 
 int8_t encoderSign[MOTOR_COUNT];
@@ -64,14 +65,11 @@ void printSigns() {
     Serial.print(F(",MOT,"));
     Serial.println(motorSign[i]);
   }
+}
 
-  if (!signsOverridden()) return;
-
-  Serial.println(F("INFO,PASTE_INTO_MiniRobotGeometry.h,IN_BOTH_SKETCH_FOLDERS"));
-  Serial.println(F("// ---------------------------------------------------------"));
+void printSignArrays() {
   printSignArray(F("ENCODER_SIGN"), encoderSign);
   printSignArray(F("MOTOR_DIRECTION_SIGN"), motorSign);
-  Serial.println(F("// ---------------------------------------------------------"));
 }
 
 // -----------------------------------------------------------------------------
@@ -181,7 +179,7 @@ static bool commissionWheel(uint8_t index) {
     // no matter how fast the wheel spins.
     Serial.println(F("INFO,IF_THE_WHEEL_SPUN,CHANNEL_B_IS_FLOATING_OR_MISWIRED,LEFT_B=D6_RIGHT_B=D11"));
     Serial.println(F("INFO,IF_IT_DID_NOT_SPIN,CHECK_VM_STBY_AND_THE_MOTOR_LEADS"));
-    Serial.println(F("INFO,CONFIRM_BY_HAND_WITH,TICKS,20"));
+    Serial.println(F("INFO,CONFIRM_BY_HAND_WITH,CPR"));
     return false;
   }
 
@@ -269,5 +267,6 @@ void commissionDirections(int8_t onlyIndex) {
 
   motorsCoastAll();
   printSigns();
+  printGeometryPasteBlock();
   Serial.println(allOk ? F("ACK,DIR_DONE") : F("WARN,DIR_INCOMPLETE"));
 }

@@ -29,10 +29,11 @@ const float WHEEL_DIAMETER_MM = 47.0f;
 // thousands": a low-PPR magnetic encoder behind a modest reduction can easily
 // read less than an output-shaft optical encoder would.
 //
-// Measure it, do not assume it. Easiest is the calibration sketch:
-//   TICKS,20    then turn one wheel by hand exactly one full turn.
-// Or from the base controller: send RESET_ODOM, turn the wheel one full turn,
-// and read that wheel's tick field out of the telemetry line.
+// Measure it, do not assume it. Easiest is the calibration sketch: send CPR
+// and it walks you through both wheels -- turn each one a known number of full
+// turns by hand, it counts the ticks, divides, and prints this line ready to
+// paste back. Or from the base controller: send RESET_ODOM, turn the wheel one
+// full turn, and read that wheel's tick field out of the telemetry line.
 //
 // Per-wheel values (rather than one shared constant) matter because encoder
 // undercount on one side makes its measured speed under-report, which makes

@@ -40,5 +40,10 @@ void commissionDirections(int8_t onlyIndex);
 // True when either sign differs from what MiniRobotGeometry.h was compiled with.
 bool signsOverridden();
 
-// Current values, plus the paste-ready lines when they differ from the header.
+// One status row per wheel.
 void printSigns();
+
+// Just the two const lines, for the MiniRobotGeometry.h paste block that
+// Counts.cpp assembles (counts and signs live in one header, so they get one
+// block).
+void printSignArrays();

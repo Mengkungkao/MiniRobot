@@ -6,6 +6,7 @@
 #include "MiniRobotMotors.h"
 
 #include "Config.h"
+#include "Counts.h"
 #include "Direction.h"
 #include "Fit.h"
 #include "Measure.h"
@@ -24,14 +25,17 @@ void printConfig() {
   // a few hundred bytes of a sketch that is half empty and turns a silent
   // wrong answer into a visible one.
   Serial.print(F("INFO,GEOMETRY,counts="));
-  Serial.print(MEASURED_COUNTS_PER_REV[LEFT], 1);
+  Serial.print(countsPerRev[LEFT], 1);
   Serial.print('/');
-  Serial.print(MEASURED_COUNTS_PER_REV[RIGHT], 1);
+  Serial.print(countsPerRev[RIGHT], 1);
   Serial.print(F(",dia="));
   Serial.print(WHEEL_DIAMETER_MM, 2);
   Serial.print(F(",maxpwm="));
   Serial.println((int)MAX_DRIVE_PWM);
   printSigns();
+  if (countsOverridden() || signsOverridden()) {
+    Serial.println(F("INFO,GEOMETRY_MEASURED_THIS_SESSION,NOT_YET_PASTED_INTO_THE_HEADER"));
+  }
   Serial.println(F("INFO,COMPARE_WITH,CFG,ON_arduino_mini_base_controller,THEY_MUST_AGREE"));
 
   Serial.print(F("INFO,CONFIG,range="));
@@ -56,12 +60,12 @@ void printConfig() {
 }
 
 void printHelp() {
+  Serial.println(F("CMD,CPR[,turns]            hand-spin each wheel, count ticks per revolution"));
   Serial.println(F("CMD,DIR[,motor]            commission BOTH direction signs from one look"));
   Serial.println(F("CMD,SIGN                   print the commissioning signs"));
   Serial.println(F("CMD,CAL[,motor]            sweep and fit (default: both motors, both directions)"));
   Serial.println(F("CMD,SWEEP,motor[,R]        one motor, one direction"));
   Serial.println(F("CMD,RESULT                 reprint fits and the paste block"));
-  Serial.println(F("CMD,TICKS[,seconds]        stream raw encoder counts"));
   Serial.println(F("CMD,STEP,pwm_step          set sweep step"));
   Serial.println(F("CMD,RANGE,min_pwm,max_pwm  set sweep range"));
   Serial.println(F("CMD,DWELL,settle_ms,win_ms set per-step timing"));
@@ -96,7 +100,27 @@ static void processCommand(char *line) {
     if (*p >= 'a' && *p <= 'z') *p = *p - ('a' - 'A');
   }
 
-  if (strcmp(command, "DIR") == 0) {
+  if (strcmp(command, "CPR") == 0) {
+    char *motorText = strtok_r(NULL, ",", &savePtr);
+    char *turnsText = strtok_r(NULL, ",", &savePtr);
+    // CPR,<turns> is the common case and CPR,<motor>,<turns> the rare one, so
+    // a lone argument is read as a turn count unless it names a motor.
+    int8_t index = -1;
+    int turns = CPR_DEFAULT_TURNS;
+    if (motorText && turnsText) {
+      index = parseOptionalMotor(motorText);
+      turns = atoi(turnsText);
+    } else if (motorText) {
+      turns = atoi(motorText);
+    }
+    if (index == -2 || turns < 1 || turns > CPR_MAX_TURNS) {
+      Serial.print(F("ERR,CPR_FORMAT,CPR[,turns],TURNS_1_"));
+      Serial.println(CPR_MAX_TURNS);
+      return;
+    }
+    measureCountsPerRev(index, (uint8_t)turns);
+  }
+  else if (strcmp(command, "DIR") == 0) {
     const int8_t index = parseOptionalMotor(strtok_r(NULL, ",", &savePtr));
     if (index == -2) {
       Serial.println(F("ERR,DIR_MOTOR_RANGE"));
@@ -133,11 +157,6 @@ static void processCommand(char *line) {
   }
   else if (strcmp(command, "RESULT") == 0) {
     printResultTable();
-  }
-  else if (strcmp(command, "TICKS") == 0) {
-    char *secondsText = strtok_r(NULL, ",", &savePtr);
-    const int seconds = secondsText ? atoi(secondsText) : 30;
-    streamTicks((uint32_t)constrain(seconds, 1, 300) * 1000UL);
   }
   else if (strcmp(command, "STEP") == 0) {
     char *stepText = strtok_r(NULL, ",", &savePtr);

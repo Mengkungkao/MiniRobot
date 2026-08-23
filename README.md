@@ -91,11 +91,11 @@ arduino_mini_motor_calibration/        bench sketch: measures and fits the
   arduino_mini_motor_calibration.ino    feed-forward motor constants (section 7)
   MiniRobot*.h/.cpp                    byte-identical copies of the six
                                          shared-layer files above
-  Config.h                             baud, fit thresholds, DIR and sweep
-                                         settings
+  Config.h                             baud, fit thresholds, CPR, DIR and
+                                         sweep settings
+  Counts.h/.cpp                        the session counts-per-rev and CPR
   Direction.h/.cpp                     the session signs and DIR
-  Measure.h/.cpp                       abort handling, one speed measurement,
-                                         TICKS
+  Measure.h/.cpp                       abort handling, one speed measurement
   Fit.h/.cpp                           least squares, results table, paste block
   Sweep.h/.cpp                         the PWM sweep and CAL
   Commands.h/.cpp                      serial command set, CONFIG, HELP
@@ -313,10 +313,23 @@ put the robot on blocks so both wheels spin free, open a serial terminal at
 500000 baud and send:
 
 ```text
+CPR
+```
+
+`CPR` measures encoder counts per wheel revolution, by hand, with the motors
+off: mark the tyre, turn each wheel the number of turns it asks for, press
+Enter. This goes first because it is the scale factor under every other number
+in the sketch and in the firmware — get it wrong and every speed is wrong by
+exactly that factor, while telemetry, `/odom` and the PID all agree the robot
+is on target. Nothing downstream can detect it.
+
+Then send:
+
+```text
 DIR
 ```
 
-`DIR` commissions the two direction signs first, and it is not optional. It
+`DIR` commissions the two direction signs, and it is not optional. It
 spins each wheel at a fixed driver polarity with no signs applied, asks which
 way the robot tried to roll, and derives both `MOTOR_DIRECTION_SIGN` and
 `ENCODER_SIGN` from your answer. Answer by watching the wheel, not the numbers:
@@ -342,12 +355,11 @@ const float FF_INTERCEPT_MM_S_FWD[MOTOR_COUNT] = {-71.20f, -76.85f};
 ...
 ```
 
-Send `HELP` for the rest of the commands (`TICKS` for counts-per-rev,
-`RANGE`/`STEP`/`DWELL`/`PASSES` to retune the sweep, `RESULT` to reprint the
-paste block). Any character aborts a running sweep.
+Send `HELP` for the rest of the commands (`RANGE`/`STEP`/`DWELL`/`PASSES` to
+retune the sweep, `RESULT` to reprint the paste block). Any character aborts a running sweep.
 
-The sketch stops there on purpose: it drives the motor channels, commissions
-the directions, reads the encoders and prints the curve. Checking the fit
+The sketch stops there on purpose: it drives the motor channels, counts the
+encoder ticks per wheel turn, commissions the directions, and prints the curve. Checking the fit
 against a control law is the firmware's job, not the bench tool's.
 
 Re-flash the main firmware when you are done.
@@ -437,7 +449,7 @@ as the IDE defaults to):
 | Sketch | Flash (of 32256) | SRAM (of 2048) |
 | --- | --- | --- |
 | `arduino_mini_base_controller` | 27554 B (85%) | 1102 B (54%) |
-| `arduino_mini_motor_calibration` | 16278 B (50%) | 431 B (21%) |
+| `arduino_mini_motor_calibration` | 18652 B (58%) | 437 B (21%) |
 | `arduino_mini_imu_calibration` | 30326 B (94%) | 791 B (39%) |
 
 Splitting the firmware into modules cost nothing in SRAM. Duplicating the shared
@@ -874,6 +886,7 @@ extrapolation nothing has ever checked. Re-calibrate over the band that is
 actually used -- in `arduino_mini_motor_calibration/`, at 500000 baud:
 
 ```text
+CPR
 DIR
 RANGE,8,60
 STEP,2

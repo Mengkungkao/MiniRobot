@@ -38,9 +38,10 @@
   fit scaled by the same numbers. If you edit one copy, copy it to the other.
 
   Sketch layout (the IDE compiles every .cpp/.h in this folder):
-    Config.h            baud, fit thresholds, DIR and sweep settings
+    Config.h            baud, fit thresholds, CPR, DIR and sweep settings
+    Counts.h/.cpp       the session counts-per-rev and CPR
     Direction.h/.cpp    the session signs and DIR
-    Measure.h/.cpp      abort handling, one speed measurement, TICKS
+    Measure.h/.cpp      abort handling, one speed measurement
     Fit.h/.cpp          least squares, the results table, the paste block
     Sweep.h/.cpp        the PWM sweep and CAL
     Commands.h/.cpp     the serial command set, CONFIG and HELP
@@ -55,11 +56,25 @@
      bakes a wrong slope into the firmware.
   3. Flash this sketch and open a serial terminal at 500000 baud. Any line
      ending works -- "Newline", "Carriage return" or "Both NL & CR".
-  4. Check MEASURED_COUNTS_PER_REV in MiniRobotGeometry.h (this folder) is
-     right for your encoders. Everything printed here is in mm/s derived from
-     it, so if it is wrong the whole fit is wrong by the same factor. Verify
-     with:  TICKS,20
-     then turn one wheel by hand exactly one full turn and read the total.
+  4. Run:  CPR
+     FIRST, before anything else is measured. It asks you to turn each wheel a
+     known number of full turns by hand, counts the ticks, and divides.
+
+     Counts per revolution is the scale factor under every other number here
+     and in the firmware. Get it wrong and the whole fit is wrong by exactly
+     the same factor, silently: the robot outruns or under-runs its command
+     while telemetry, odometry and the PID all agree it is on target. Nothing
+     downstream can detect it, which is why this goes first.
+
+     It has to be by hand. The number is counts per turn of the WHEEL, after
+     the gearbox, and nothing on the board knows the gear ratio -- driving the
+     motor would only count ticks against a clock, which says nothing about how
+     far the wheel actually went.
+
+     Mark the tyre and the chassis so a full turn is unambiguous, turn the
+     wheel, press Enter. Default is 5 turns; more is better, because the error
+     is how precisely you stop on the mark and that divides down. CPR,10 for a
+     careful job, CPR,1 for a quick re-check.
   5. Run:  DIR
      Thirty seconds, and it is not optional.
 
@@ -91,14 +106,17 @@
      arduino_mini_base_controller/Config.h, replacing the four existing lines.
      Never paste a block containing 0.000f -- that wheel has no fit.
 
-  Sending any character while a sweep or TICKS is running aborts it and coasts
-  the motors. Bare line endings do not count, so a terminal that appends CR+LF
-  cannot abort the very run it just started. DIR's probes are the exception:
-  they are under two seconds each and swallow whatever you type, because a
-  keystroke there is far more likely to be an early answer than an abort.
+  Sending any character while a sweep is running aborts it and coasts the
+  motors. Bare line endings do not count, so a terminal that appends CR+LF
+  cannot abort the very run it just started. CPR and DIR are the exception:
+  they are asking you questions, so they read what you type as the answer.
+  Abort either by answering X.
 
   COMMANDS
   ------------------------------------------------------------
+    CPR                        hand-spin both wheels, count ticks per revolution
+    CPR,<turns>                ... asking for that many full turns (default 5)
+    CPR,<motor>,<turns>        ... for one wheel only
     DIR                        commission both signs from one look per wheel
     DIR,<motor>                ... for one wheel only
     SIGN                       print the commissioning signs
@@ -106,7 +124,6 @@
     CAL,<motor>                one motor (1 = left, 2 = right), both directions
     SWEEP,<motor>[,R]          one motor, one direction (R = reverse)
     RESULT                     reprint the last fit table and constants block
-    TICKS[,<seconds>]          stream raw encoder counts (counts-per-rev check)
     STEP,<pwm_step>            PWM step size             (default 10)
     RANGE,<min_pwm>,<max_pwm>  PWM sweep range           (default 10..210)
     DWELL,<settle_ms>,<win_ms> per-step timing           (default 400, 600)
@@ -120,9 +137,11 @@
     C,<motor>,<F|R>,<pwm>,<mm_s>,<USED|STALL>   one measured point
     R,<motor>,<F|R>,<slope>,<intercept>,<r2>,<n>,<deadzone_pwm>,<mm_s_at_max>
     DIR,<motor>,F,<pwm>,<mm_s>,<OK|FAILED>      DIR's post-commission self check
-    ASK,...                                     DIR is waiting for F, B or X
+    ASK,...                                     waiting for an operator answer
     SIGN,<motor>,ENC,<sign>,MOT,<sign>
-    TICKS,<left>,<right>
+    CPR,LIVE,<left>,<right>                     running totals while you spin
+    CPR,<motor>,TICKS,<n>,TURNS,<n>,COUNTS_PER_REV,<n>
+    CPR,<motor>,COUNTS_PER_REV,<n>,MM_PER_COUNT,<n>
     INFO,... / WARN,... / ERR,... / ACK,...
 
   The C rows are plain CSV, so you can also capture them and fit offline if you
@@ -138,12 +157,14 @@
 
 #include "Commands.h"
 #include "Config.h"
+#include "Counts.h"
 #include "Direction.h"
 #include "Fit.h"
 
 void setup() {
   Serial.begin(SERIAL_BAUD);
 
+  countsBegin();     // session copy of MEASURED_COUNTS_PER_REV
   signsBegin();      // session copies of ENCODER_SIGN / MOTOR_DIRECTION_SIGN
   motorsBegin();     // outputs, ~31 kHz PWM, STBY high
   encodersBegin();

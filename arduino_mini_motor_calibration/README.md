@@ -6,9 +6,9 @@ fits it, so the feed-forward constants in
 also commissions the two direction signs those constants depend on.
 
 It is a standalone tool that does exactly five things: drive the TB6612
-channels, run motors 1 and 2, work out which way each one turns, read the
-encoders, and print the measured points plus the fitted forward and reverse
-curves. No IMU, no odometry, no PID, no ROS serial protocol, no closed-loop
+channels, run motors 1 and 2, count encoder ticks per wheel revolution, work
+out which way each motor turns, and print the measured points plus the fitted
+forward and reverse curves. No IMU, no odometry, no PID, no ROS serial protocol, no closed-loop
 anything. Flash it, calibrate, paste the constants it prints into the main
 firmware, then flash the main firmware back.
 
@@ -53,8 +53,10 @@ calibration.** Replace them before driving on the floor.
 - [ ] **Direction signs commissioned.** Send `DIR` and answer it. No fit can
       repair a sign error, and a wheel with both signs wrong measures perfectly
       while turning the wrong way. `DIR` is step 3 of the procedure below.
-- [ ] **`MEASURED_COUNTS_PER_REV` correct.** Every mm/s printed here is scaled
-      by it (see step 2 of the procedure).
+- [ ] **Counts per revolution measured.** Send `CPR` and turn each wheel by
+      hand. Every mm/s printed here and in the firmware is scaled by it, so a
+      wrong value is wrong by exactly that factor and nothing downstream can
+      see it. `CPR` is step 2 of the procedure below.
 
 These constants are duplicated from the main firmware and must match it, or the
 numbers you paste back will not mean what the firmware thinks they mean:
@@ -62,7 +64,7 @@ numbers you paste back will not mean what the firmware thinks they mean:
 | Constant | Default | Why it matters here |
 | --- | --- | --- |
 | `WHEEL_DIAMETER_MM` | `47.0` | converts encoder counts to mm |
-| `MEASURED_COUNTS_PER_REV` | `{520, 520}` | scales every speed in the fit |
+| `MEASURED_COUNTS_PER_REV` | measured by `CPR` | scales every speed in the fit |
 | `MAX_DRIVE_PWM` | `210` | the fit must span the range the firmware uses |
 | `ENCODER_SIGN` | commissioned by `DIR` | forward must read positive |
 | `MOTOR_DIRECTION_SIGN` | commissioned by `DIR` | which driver polarity is forward |
@@ -92,14 +94,44 @@ INFO,CONFIG,range=10..210,step=10,settle_ms=400,window_ms=600,passes=2
 INFO,ESTIMATED_SECONDS,per_direction=42,full_CAL=168
 ```
 
-**2. Check counts-per-rev.** Send `TICKS,20`, then turn one wheel by hand
-exactly one full turn and read the running total. Do it per wheel. Put the
-magnitudes in `MEASURED_COUNTS_PER_REV` here **and** in the main firmware.
+**2. Measure counts per revolution.** Send `CPR`. This is the first
+measurement for a reason: it is the scale factor under every other number in
+this sketch and in the firmware.
+
+It takes each wheel in turn, with the motors off. Mark the tyre and the chassis
+so a full turn is unambiguous, turn the wheel the requested number of turns by
+hand, and press Enter:
+
+```text
+INFO,CPR_START,MOTORS_ARE_OFF,THIS_IS_MEASURED_BY_HAND
+INFO,CPR_SPIN,MOTOR_1(LEFT),TURN_THIS_WHEEL_EXACTLY_5,FULL_TURNS_BY_HAND
+INFO,MARK_THE_TYRE_AND_THE_CHASSIS_SO_ONE_TURN_IS_UNAMBIGUOUS
+ASK,PRESS_ENTER_WHEN_DONE,X_THEN_ENTER_TO_ABORT
+CPR,LIVE,412,0
+CPR,LIVE,1183,0
+CPR,LIVE,2601,0
+CPR,1,TICKS,2601,TURNS,5,COUNTS_PER_REV,520.2
+```
+
+The `CPR,LIVE` rows stream both wheels while you turn one, so a pair of swapped
+encoders shows up as the wrong column moving. Default is 5 turns; `CPR,10` for
+a careful job, `CPR,1` for a quick re-check, `CPR,<motor>,<turns>` for one
+wheel. More turns is strictly better — the error is how precisely you stop on
+the mark, a fixed number of counts however far the wheel went, so it divides
+down.
+
+The result is used for the rest of the session immediately, and printed ready
+to paste into `MiniRobotGeometry.h` in **both** sketch folders.
+
+It has to be by hand. The number is counts per turn of the *wheel*, after the
+gearbox, and nothing on the board knows the gear ratio — driving the motor
+would only count ticks against a clock, which says nothing about how far the
+wheel actually went.
 
 The shipped 520 is this robot's hardware: a 13 PPR encoder on the motor shaft,
 decoded x2 (channel A on CHANGE, so two counts per encoder cycle), behind a
-1:20 gearbox — 13 x 2 x 20 = 520. Recompute it for your own encoder and gear
-ratio. Get this wrong and every speed in the fit is wrong by the same factor.
+1:20 gearbox — 13 x 2 x 20 = 520. That arithmetic is a prediction; `CPR` is the
+measurement.
 
 **3. Commission the direction signs.** Send `DIR`. It takes about thirty
 seconds and it is not optional — see [§8](#which-way-is-forward) for what goes
@@ -171,10 +203,11 @@ probably too hot.
 | `CAL,<motor>` | Same for one motor (`1` = left, `2` = right). |
 | `SWEEP,<motor>[,R]` | One motor, one direction. `R` = reverse. Fits and stores that one direction. |
 | `RESULT` | Reprint the fit table and the paste block. |
+| `CPR[,<turns>]` | Hand-spin measurement of encoder counts per wheel revolution, both wheels, motors off. Default 5 turns, max 20. Session-only; printed ready to paste. **Run this first.** |
+| `CPR,<motor>,<turns>` | Same for one wheel. |
 | `DIR` | Commission **both** direction signs for both wheels from one look at each. Spins a wheel at a fixed driver polarity, asks which way the robot rolled, derives `MOTOR_DIRECTION_SIGN` and `ENCODER_SIGN` from the answer, and confirms them. Session-only; the values are printed ready to paste. **Run this before `CAL`.** |
 | `DIR,<motor>` | Same for one wheel. Skips the both-wheels-together confirmation. |
 | `SIGN` | Print the current commissioning signs for every wheel. |
-| `TICKS[,<seconds>]` | Motors off; stream raw encoder totals. Default 30 s, max 300. |
 | `STEP,<pwm_step>` | Sweep step size, 1–50. Default 10. |
 | `RANGE,<min>,<max>` | Sweep range within 0–210, at least 30 wide. Default 10–210. |
 | `DWELL,<settle_ms>,<window_ms>` | Settle 50–5000, window 200–5000. Default 400, 600. |
@@ -185,14 +218,13 @@ probably too hot.
 
 Commands are case-insensitive and terminated by `\n`, `\r` or `:`.
 
-**Sending any character while a sweep or `TICKS` is running aborts it and
-coasts the motors.** An aborted sweep stores no fit, so the
+**Sending any character while a sweep is running aborts it and coasts the
+motors.** An aborted sweep stores no fit, so the
 previous result for that wheel and direction stays untouched.
 
-`DIR`'s probes are the one exception: they last under two seconds each and
-swallow whatever you type, because a keystroke while you are being asked to
-watch a wheel is far more likely to be an early answer than an abort. Abort
-`DIR` by answering `X`.
+`CPR` and `DIR` are the exception: they are asking you questions, so they read
+what you type as the answer rather than as an abort. Abort either by answering
+`X`.
 
 Sweep settings are not persisted — they reset to the defaults on every reset or
 re-upload.
@@ -204,9 +236,10 @@ re-upload.
 | `C,...` | `motor, F\|R, pwm, mm_s, USED\|STALL` — one measured point |
 | `R,...` | `motor, F\|R, slope, intercept, r2, samples, deadzone_pwm, mm_s_at_max_pwm` |
 | `DIR,...` | `motor, F, pwm, mm_s, OK\|FAILED` — `DIR`'s post-commission self check |
-| `ASK,...` | `DIR` is waiting for `F`, `B` or `X` on the serial line |
+| `ASK,...` | waiting for an operator answer on the serial line |
+| `CPR,LIVE,...` | `left, right` — running raw totals while you turn a wheel |
+| `CPR,...` | `motor, TICKS, n, TURNS, n, COUNTS_PER_REV, n` — one wheel's result |
 | `SIGN,...` | `motor, ENC, sign, MOT, sign` — one row per wheel |
-| `TICKS,...` | `left, right` — raw counts since the command started |
 | `INFO,` / `WARN,` / `ERR,` / `ACK,` | progress, diagnostics, failures, completion |
 
 `C` rows are plain CSV, so you can also capture the log and fit offline if you
@@ -272,7 +305,7 @@ for a full `CAL`. `CONFIG` prints the estimate.
 | Message or symptom | Cause | Fix |
 | --- | --- | --- |
 | Nothing, or garbage characters | Terminal at the wrong baud | 500000, not 115200 |
-| `ERR,FIT_FAILED,MOTOR_n,used=0,...` + `CAUSE,NO_ENCODER_MOTION` | The wheel may be spinning, but the encoder netted zero counts. Most often channel **B** is floating or on the wrong pin — the ISR then reads a constant B and counts `+1, -1, +1, -1`, netting zero however fast the wheel turns. Also: flat battery, `STBY` low, channel A unplugged, wheel jammed | `DIR` reports the same fault in two seconds. Then `TICKS,20` and turn that wheel by hand: if the count stays near zero while the other wheel counts cleanly, it is the encoder wiring — left B = `D6`, right B = `D11` |
+| `ERR,FIT_FAILED,MOTOR_n,used=0,...` + `CAUSE,NO_ENCODER_MOTION` | The wheel may be spinning, but the encoder netted zero counts. Most often channel **B** is floating or on the wrong pin — the ISR then reads a constant B and counts `+1, -1, +1, -1`, netting zero however fast the wheel turns. Also: flat battery, `STBY` low, channel A unplugged, wheel jammed | `CPR` catches it first: turn that wheel by hand and if the count stays near zero while the other column moves cleanly, it is the encoder wiring — left B = `D6`, right B = `D11`. `DIR` reports the same fault in two seconds |
 | `ERR,FIT_FAILED,MOTOR_n,...` + `CAUSE,WHEEL_MEASURED_BACKWARDS` | The signs were never commissioned. Normal on a differential drive, where the right motor is mounted mirrored | `DIR`, then `CAL`. Do not try to work out which sign to flip by hand — that is the mistake `DIR` exists to remove |
 | `ERR,FIT_FAILED,MOTOR_n,...` + `CAUSE,TOO_SLOW_OR_TOO_FEW_POINTS` | The wheel moved, but never above `MIN_VALID_SPEED_MM_S` | Charge the battery, check `STBY`, confirm the wheel spins free |
 | `WARN,SOME_POINTS_RAN_BACKWARDS,...` | Part of the sweep fitted and part ran backwards — one sign cannot describe a wheel that changed its mind. Usually a slipping coupling or an intermittent encoder channel | `DIR`, then look for the mechanical fault before trusting the fit |
@@ -283,7 +316,10 @@ for a full `CAL`. `CONFIG` prints the estimate.
 | `WARN,LOW_R2,<r2>,...` | Noisy or non-linear measurement | Longer `DWELL`, charged battery, check for mechanical binding |
 | `WARN,WHEELS_DIFFER_A_LOT,...` | Left and right slopes differ by more than 25% | Look for drag on the slow wheel; re-check `MEASURED_COUNTS_PER_REV` per wheel |
 | `0.000f /*NOT_CALIBRATED*/` in the paste block | That wheel/direction has no valid fit — the preceding `WARN,MISSING_FIT` lines name which | Fix the cause the `ERR,FIT_FAILED` line reported, then re-run. **Never paste a block containing `0.000f`** — the firmware treats a non-positive slope as "no feed-forward" and falls back to pure PID, so that wheel will be visibly slow |
-| All speeds off by a constant factor | Wrong `MEASURED_COUNTS_PER_REV` | Re-measure with `TICKS` |
+| All speeds off by a constant factor | Wrong `MEASURED_COUNTS_PER_REV` | Re-measure with `CPR`, using more turns |
+| `ERR,CPR_NO_COUNTS,...` | The wheel turned but the encoder netted near zero, or it never turned | Channel B floating or miswired (left `D6`, right `D11`); if the *other* column moved instead, the two encoders are swapped |
+| `WARN,CPR_CROSSTALK,...` | The other wheel counted too | Encoders cross-wired, or the wrong wheel was turned |
+| `WARN,WHEELS_SHOULD_MATCH,...` | The two wheels measured more than 5% apart | Same part, same gearbox — one count is wrong. Re-run `CPR` with more turns and stop precisely on the mark |
 
 ### Which way is forward
 
@@ -364,5 +400,5 @@ robot wired to those signs, so paste both or neither, into
   measuring at the default 490 Hz would produce a fit the firmware could not
   use.
 
-Build footprint on an Uno: 16278 bytes of flash (50%) and 431 bytes of static
+Build footprint on an Uno: 18652 bytes of flash (58%) and 437 bytes of static
 RAM (21%).

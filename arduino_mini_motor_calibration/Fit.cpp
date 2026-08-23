@@ -1,5 +1,6 @@
 #include "Fit.h"
 
+#include "Counts.h"
 #include "Direction.h"
 #include "Measure.h"
 
@@ -116,13 +117,14 @@ static void printConstantsBlock() {
   reportSlopeMismatch(FWD, F("FORWARD"));
   reportSlopeMismatch(REV, F("REVERSE"));
 
-  // A fit measured under a session sign override describes a robot that does
-  // not exist yet. Pasting the slopes without the signs gives a wheel that runs
-  // backwards while the PID reports success, so print them together.
-  if (signsOverridden()) {
+  // A fit measured under session overrides describes a robot that does not
+  // exist yet. Pasting the slopes without the counts gives every speed scaled
+  // by the wrong factor; without the signs, a wheel that runs backwards while
+  // the PID reports success. Print them together or not at all.
+  if (countsOverridden() || signsOverridden()) {
     Serial.println();
-    Serial.println(F("WARN,MEASURED_WITH_OVERRIDDEN_SIGNS,PASTE_THESE_TOO"));
-    printSigns();
+    Serial.println(F("WARN,MEASURED_WITH_OVERRIDDEN_GEOMETRY,PASTE_THIS_TOO"));
+    printGeometryPasteBlock();
   }
 }
 

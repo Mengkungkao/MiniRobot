@@ -30,6 +30,23 @@ const float MIN_VALID_SPEED_MM_S = 15.0f;
 const float MIN_ACCEPTABLE_R2 = 0.97f;
 
 // -----------------------------------------------------------------------------
+// CPR -- counts per wheel revolution, measured by hand
+// -----------------------------------------------------------------------------
+
+// Full turns of the wheel the operator is asked for. The error is dominated by
+// how precisely they stop on the mark, which is a fixed number of counts
+// however far the wheel went, so more turns divides it down.
+const uint8_t CPR_DEFAULT_TURNS = 5;
+const uint8_t CPR_MAX_TURNS = 20;
+
+// Fewer counts than this over several hand turns means the encoder is not
+// reporting rotation at all -- a full turn on this robot is in the hundreds.
+const int32_t CPR_MIN_TICKS = 50;
+
+// Turning a wheel by hand and stopping on a mark is not a hurried job.
+const uint32_t CPR_TIMEOUT_MS = 300000UL;
+
+// -----------------------------------------------------------------------------
 // DIR -- direction commissioning
 // -----------------------------------------------------------------------------
 //
