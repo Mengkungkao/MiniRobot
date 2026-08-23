@@ -863,7 +863,23 @@ Everything before `motion` is read-only and safe on the floor; `motion` spins
 the wheels and asks first. `--no-motion` stops after `model`, `--yes` skips the
 prompt. A wheel that runs away aborts the run and stops the motors.
 
-Two results in `motion` need reading in context:
+`motion` reports each wheel twice: `wheels matched` compares the two wheels
+against *each other* on a forward command, and `wheel tracking` compares each
+wheel against *its own target* in both directions. The second one is the
+diagnostic. A wrong `MEASURED_COUNTS_PER_REV` is a pure scale error — the loop
+closes on a mis-scaled encoder, so the wheel lands on the same fraction of
+target whichever way it turns. A bad feed-forward fit or mechanical drag is
+direction-dependent, because breakaway PWM differs per direction. Comparing the
+two wheels to each other cannot tell those apart; comparing each wheel to its
+own target in both directions can, and `wheel tracking` names which one it is.
+
+Wheel labels in the report are ROS ones — `left` is the wheel on the base
+frame's `+y` side. With `reverse_base_direction` on that is **Arduino motor
+2**, not motor 1, so the check queries the bridge and prints the motor number
+alongside the label. Re-running `CAL` fits both motors in both directions
+anyway, so the numbering matters for reading the report, not for the fix.
+
+Two more results need reading in context:
 
 - **The front stop gate blocks the forward checks.** `cmd_mux` zeroes any
   command with forward velocity while something sits inside

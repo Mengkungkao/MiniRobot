@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 import rclpy
 from diagnostic_msgs.msg import DiagnosticArray
 from geometry_msgs.msg import Twist
+from rcl_interfaces.msg import ParameterType
+from rcl_interfaces.srv import GetParameters
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -214,6 +216,35 @@ class Preflight(Node):
         if msg is None or len(msg.velocity) < 2:
             return [float("nan"), float("nan")]
         return [v * RAD_S_TO_MM_S for v in msg.velocity[:2]]
+
+    def bridge_reverse_base(self, timeout: float = 2.0) -> bool | None:
+        """Ask the serial bridge whether it is flipping the base frame.
+
+        Wheel labels in this report are ROS ones -- 'left' is the wheel on the
+        base frame's +y side. Config.h and validate_motor_control.py number
+        motors in the Arduino's frame, and when the bridge is reversing, the
+        two disagree: ROS left is Arduino motor 2. Naming the wrong motor sends
+        the operator to the wrong constants, so it is worth one service call.
+        Returns None if the bridge does not answer, in which case the report
+        says nothing about motor numbers rather than guessing."""
+        client = self.create_client(GetParameters,
+                                    "/mini_serial_bridge/get_parameters")
+        try:
+            if not client.wait_for_service(timeout_sec=timeout):
+                return None
+            future = client.call_async(
+                GetParameters.Request(names=["reverse_base_direction"]))
+            end = time.monotonic() + timeout
+            while rclpy.ok() and not future.done() and time.monotonic() < end:
+                rclpy.spin_once(self, timeout_sec=0.05)
+            if not future.done():
+                return None
+            values = future.result().values
+            if not values or values[0].type != ParameterType.PARAMETER_BOOL:
+                return None
+            return bool(values[0].bool_value)
+        finally:
+            self.destroy_client(client)
 
     def front_nearest(self) -> tuple[float, float]:
         """Nearest valid return inside the sector cmd_mux gates on, and its
@@ -689,6 +720,17 @@ def phase_motion(node: Preflight, args) -> Phase:
     else:
         p.add("front stop gate", PASS, f"{clearance:.2f} m clear ahead")
 
+    # Resolved before anything spins, so the service call cannot interleave
+    # with a drive test. None means the bridge did not answer and the report
+    # simply omits motor numbers.
+    reversed_base = node.bridge_reverse_base()
+    if reversed_base is None:
+        motor_of = {"left": "", "right": ""}
+    else:
+        left_motor, right_motor = ("2", "1") if reversed_base else ("1", "2")
+        motor_of = {"left": f" (motor {left_motor})",
+                    "right": f" (motor {right_motor})"}
+
     speed = args.speed
     turn = args.turn
 
@@ -770,8 +812,10 @@ def phase_motion(node: Preflight, args) -> Phase:
         if mismatch > 0.25 * mean:
             p.add("wheels matched", FAIL, detail,
                   "The robot will curve on a straight command and SLAM will fight "
-                  "the odometry. Measure MEASURED_COUNTS_PER_REV per wheel and "
-                  "re-run the feed-forward calibration.")
+                  "the odometry. This check only reports the symptom; the "
+                  "'wheel tracking' check below compares each wheel against its "
+                  "own target in both directions, which is what tells an encoder "
+                  "scale error apart from a feed-forward one.")
         elif mismatch > 0.10 * mean:
             p.add("wheels matched", WARN, detail)
         else:
@@ -798,6 +842,48 @@ def phase_motion(node: Preflight, args) -> Phase:
               f"L {left_r:+.0f}  R {right_r:+.0f} mm/s",
               "" if ok else "A wheel does not reverse. Check its H-bridge "
                             "direction pins.")
+
+        # Forward and reverse together separate two faults that look identical
+        # from one direction alone. A wrong MEASURED_COUNTS_PER_REV is a pure
+        # scale error: the loop closes on a mis-scaled encoder, so the wheel
+        # lands on the same fraction of target whichever way it turns. A
+        # feed-forward or mechanical fault is direction-dependent, because
+        # breakaway PWM differs per direction and a fit extrapolated below the
+        # band it was measured over misses one of them by more than the other.
+        # Comparing the two wheels against each other cannot tell these apart;
+        # comparing each wheel against its own target in both directions can.
+        if moved:
+            ratios = {"left": (abs(left) / target, abs(left_r) / target),
+                      "right": (abs(right) / target, abs(right_r) / target)}
+            track_detail = ", ".join(
+                f"{label}{motor_of[label]} {100*fwd:.0f}%/{100*rev:.0f}% fwd/rev"
+                for label, (fwd, rev) in ratios.items())
+            worst = min(ratios, key=lambda k: min(ratios[k]))
+            worst_fwd, worst_rev = ratios[worst]
+            if min(worst_fwd, worst_rev) > 0.85:
+                p.add("wheel tracking", PASS, track_detail)
+            elif abs(worst_fwd - worst_rev) > 0.20:
+                p.add("wheel tracking", FAIL, track_detail,
+                      f"The {worst} wheel{motor_of[worst]} misses its target by "
+                      f"a different amount in each direction, so this is NOT an "
+                      f"encoder scale error -- a wrong MEASURED_COUNTS_PER_REV "
+                      f"would be wrong by the same factor both ways. It is the "
+                      f"feed-forward fit for that motor, or mechanical drag on "
+                      f"it. Re-fit over the band actually driven: upload "
+                      f"arduino_mini_motor_calibration/, send RANGE,8,60 then "
+                      f"STEP,2 then CAL, and paste the four FF_ lines it prints "
+                      f"over the ones in arduino_mini_base_controller/Config.h. "
+                      f"CAL fits both motors in both directions, so the motor "
+                      f"numbering above does not change what you paste.")
+            else:
+                p.add("wheel tracking", FAIL, track_detail,
+                      f"The {worst} wheel{motor_of[worst]} misses its target by "
+                      f"about the same factor in both directions, which is what "
+                      f"a wrong MEASURED_COUNTS_PER_REV looks like: the loop "
+                      f"closes correctly on an encoder that counts wrong. "
+                      f"Confirm against a ruler with "
+                      f"scripts/validate_motor_control.py --tests scale "
+                      f"--distance-mm 1000 (needs floor space and a tape measure).")
 
     # Rotation is where a sign error hides best: both wheels turn, the robot
     # spins the wrong way, and only the IMU disagrees.
