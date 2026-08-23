@@ -857,11 +857,34 @@ It runs four phases, ordered so a failure is easy to place:
 | `graph` | the four nodes are up, every topic is publishing at rate, the base reports healthy, no latched e-stop |
 | `sensors` | the IMU reads 1 g at rest with little gyro drift, the LiDAR returns enough valid beams, frames are named right |
 | `model` | the URDF parses, has every expected link and joint, and the TF tree reaches `odom → base_footprint → base_link → laser` |
-| `motion` | **on blocks**: a `/cmd_vel` command reaches the wheels, both turn the right way, they match each other, `/odom` agrees, and a CCW turn makes the IMU yaw rate go positive |
+| `motion` | **on blocks**: a `/cmd_vel` command reaches the wheels, both turn the right way, they match each other, and `/odom` agrees |
 
 Everything before `motion` is read-only and safe on the floor; `motion` spins
 the wheels and asks first. `--no-motion` stops after `model`, `--yes` skips the
 prompt. A wheel that runs away aborts the run and stops the motors.
+
+Two results in `motion` need reading in context:
+
+- **The front stop gate blocks the forward checks.** `cmd_mux` zeroes any
+  command with forward velocity while something sits inside
+  `front_stop_distance`, so on a blocked run the forward command never reaches
+  the motors and healthy wheels read as dead. The script detects this, offers
+  to re-check once the space is clear, and marks the forward checks `skip`
+  rather than failing them. Reverse and rotation still run — the gate only
+  stops forward motion, which is why "reverse works, forward does nothing" is
+  the signature of a blocked gate rather than a broken motor.
+- **Yaw sign cannot be verified on blocks.** The wheels spin in the air, the
+  chassis does not turn, and the gyro reads its own bias. The script reports
+  `rotate: IMU agrees` as `skip` when the measured rate is inside the noise
+  floor, and only fails it when there is real rotation with the wrong sign.
+  Check the yaw sign on the floor instead, by hand — see *IMU direction* in
+  section 19.
+
+The `sensors` phase also prints a `LiDAR bearings` line: the range at 0, +90,
+180 and -90 degrees. Nothing on the robot can tell which way the LiDAR is
+bolted down, and a scan mounted 180 degrees out passes every other check in the
+script. Compare those four numbers against the actual room — bearing 0 must be
+the caster/LiDAR end, the direction a positive `linear.x` drives (section 2).
 
 It ends with `READY FOR SLAM` or a list of what to fix and how. Mapping on top
 of a broken TF tree or a mismatched wheel pair produces a map that cannot be

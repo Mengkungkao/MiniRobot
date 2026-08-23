@@ -215,16 +215,40 @@ class Preflight(Node):
             return [float("nan"), float("nan")]
         return [v * RAD_S_TO_MM_S for v in msg.velocity[:2]]
 
-    def front_clearance(self) -> float:
+    def front_nearest(self) -> tuple[float, float]:
+        """Nearest valid return inside the sector cmd_mux gates on, and its
+        bearing in degrees. The bearing is worth reporting: scan angle zero is
+        assumed to point the same way a positive linear.x drives, so an
+        obstacle "dead ahead" that is not in front of the robot means the scan
+        is mounted backwards, not that the room is cluttered."""
         msg = self.scan.last
         if msg is None:
-            return float("inf")
-        nearest = float("inf")
+            return float("inf"), float("nan")
+        nearest, bearing = float("inf"), float("nan")
         for i, r in enumerate(msg.ranges):
             angle = msg.angle_min + i * msg.angle_increment
             if abs(angle) <= math.radians(45) and math.isfinite(r) and r > 0.0:
-                nearest = min(nearest, r)
-        return nearest
+                if r < nearest:
+                    nearest, bearing = r, math.degrees(angle)
+        return nearest, bearing
+
+    def scan_at(self, bearing_deg: float, window_deg: float = 5.0) -> float:
+        """Median valid range in a narrow window around one bearing. Median,
+        not minimum, so a single spurious short return does not define the
+        direction."""
+        msg = self.scan.last
+        if msg is None:
+            return float("nan")
+        values = []
+        for i, r in enumerate(msg.ranges):
+            angle = math.degrees(msg.angle_min + i * msg.angle_increment)
+            delta = (angle - bearing_deg + 180.0) % 360.0 - 180.0
+            if abs(delta) <= window_deg and math.isfinite(r) and r > 0.0:
+                values.append(r)
+        if not values:
+            return float("inf")
+        values.sort()
+        return values[len(values) // 2]
 
     def stop(self, seconds: float = 0.8) -> None:
         end = time.monotonic() + seconds
@@ -468,6 +492,21 @@ def phase_sensors(node: Preflight, args) -> Phase:
             p.add("LiDAR returns", PASS, detail)
         p.add("LiDAR frame", PASS if scan.header.frame_id == "laser" else WARN,
               f"frame_id '{scan.header.frame_id}' (expect laser)")
+        # Nothing on the robot can tell which way the LiDAR is bolted down, and
+        # a scan mounted 180 deg out passes every other check in this script:
+        # the beam count, the valid fraction and the frame id are all identical.
+        # It only shows up as a map that builds backwards, or as a front stop
+        # gate that trips on empty air. So print the four cardinal ranges and
+        # let the operator compare them against the actual room.
+        def _fmt(r: float) -> str:
+            return "inf" if math.isinf(r) else f"{r:.2f}"
+        p.add("LiDAR bearings", PASS,
+              "  ".join(f"{label} {_fmt(node.scan_at(bearing))} m"
+                        for label, bearing in (("fwd(0)", 0.0),
+                                               ("left(+90)", 90.0),
+                                               ("rear(180)", 180.0),
+                                               ("right(-90)", -90.0)))
+              + "  -- fwd must be the caster/LiDAR end")
 
     odom = node.odom.last
     if odom is None:
@@ -610,12 +649,43 @@ def phase_motion(node: Preflight, args) -> Phase:
             p.add("motion", SKIP, "no terminal to confirm on")
             return p
 
-    clearance = node.front_clearance()
-    if clearance < FRONT_STOP_M:
+    # cmd_mux zeroes any command with forward velocity while the front sector
+    # is blocked. That makes every forward check below meaningless AND makes
+    # healthy motors look dead, so resolve it here rather than reporting one
+    # obstacle as four dead-wheel failures. Interactive runs get a chance to
+    # move the obstacle; --yes runs just record it.
+    clearance, bearing = node.front_nearest()
+    while clearance < FRONT_STOP_M and not args.yes:
+        print()
+        print(f"  Front sector blocked: {clearance:.2f} m at {bearing:+.0f} deg "
+              f"(gate trips below {FRONT_STOP_M:.2f} m).")
+        print("  cmd_mux will zero every forward command while this holds, so the")
+        print("  forward drive checks cannot run.")
+        try:
+            answer = input("  Clear the space ahead of the LiDAR, then Enter to "
+                           "re-check (or 's' to skip): ")
+        except EOFError:
+            break
+        if answer.strip().lower().startswith("s"):
+            break
+        node.spin(0.5)
+        clearance, bearing = node.front_nearest()
+
+    blocked = clearance < FRONT_STOP_M
+    if blocked:
         p.add("front stop gate", WARN,
-              f"obstacle at {clearance:.2f} m < {FRONT_STOP_M:.2f} m",
+              f"obstacle at {clearance:.2f} m, bearing {bearing:+.0f} deg "
+              f"(gate trips below {FRONT_STOP_M:.2f} m)",
               "cmd_mux zeroes forward commands while this holds, which looks "
-              "exactly like dead motors. Clear the space ahead of the LiDAR.")
+              "exactly like dead motors -- the forward checks are skipped for "
+              "that reason, not because anything is broken. Clear the space "
+              "ahead of the LiDAR and re-run. If the space IS already clear, "
+              "the scan is pointing the wrong way: bearing 0 must be the "
+              "caster/LiDAR end, the direction a positive linear.x drives. "
+              "Compare the LiDAR bearings line in the sensors phase against "
+              "the room, then fix laser_joint yaw in the URDF (README sec. 2).")
+    elif math.isinf(clearance):
+        p.add("front stop gate", PASS, "nothing within range ahead")
     else:
         p.add("front stop gate", PASS, f"{clearance:.2f} m clear ahead")
 
@@ -664,25 +734,36 @@ def phase_motion(node: Preflight, args) -> Phase:
 
     target = speed * 1000.0
     left, right = wheels
-    p.add("command reaches the wheels",
-          PASS if max(abs(left), abs(right)) > 5.0 else FAIL,
-          f"commanded {target:+.0f} mm/s -> L {left:+.0f}  R {right:+.0f} mm/s",
-          "" if max(abs(left), abs(right)) > 5.0 else
-          "Nothing moved. Check the mux is passing (/cmd_vel_out), the watchdog "
-          "is fed, and the e-stop is clear.")
+    moved = max(abs(left), abs(right)) > 5.0
+    drive_detail = f"commanded {target:+.0f} mm/s -> L {left:+.0f}  R {right:+.0f} mm/s"
 
-    for label, value in (("left", left), ("right", right)):
-        if value < -5.0:
-            p.add(f"{label} wheel direction", FAIL,
-                  f"{value:+.0f} mm/s on a forward command",
-                  "This wheel measures backwards. Run "
-                  "scripts/validate_motor_control.py --tests link,signs on the Pi.")
-        elif abs(value) < 5.0:
-            p.add(f"{label} wheel direction", FAIL, "did not move")
-        else:
-            p.add(f"{label} wheel direction", PASS, f"{value:+.0f} mm/s forward")
+    if not moved and blocked:
+        # One obstacle in front, not four broken things. Report it once and
+        # skip everything downstream of a command that was never delivered.
+        p.add("command reaches the wheels", SKIP,
+              f"{drive_detail} -- front stop gate engaged, nothing was commanded")
+        p.add("forward drive", SKIP,
+              "wheel direction, wheel match and odom twist all need a forward "
+              "command that reaches the motors; clear the front sector and "
+              "re-run to check them")
+    else:
+        p.add("command reaches the wheels", PASS if moved else FAIL, drive_detail,
+              "" if moved else
+              "Nothing moved. Check the mux is passing (/cmd_vel_out), the "
+              "watchdog is fed, and the e-stop is clear.")
 
-    if abs(left) > 5.0 and abs(right) > 5.0:
+        for label, value in (("left", left), ("right", right)):
+            if value < -5.0:
+                p.add(f"{label} wheel direction", FAIL,
+                      f"{value:+.0f} mm/s on a forward command",
+                      "This wheel measures backwards. Run "
+                      "scripts/validate_motor_control.py --tests link,signs on the Pi.")
+            elif abs(value) < 5.0:
+                p.add(f"{label} wheel direction", FAIL, "did not move")
+            else:
+                p.add(f"{label} wheel direction", PASS, f"{value:+.0f} mm/s forward")
+
+    if moved and abs(left) > 5.0 and abs(right) > 5.0:
         mismatch = abs(left - right)
         mean = 0.5 * (abs(left) + abs(right))
         detail = f"L {left:+.0f} vs R {right:+.0f} mm/s ({100*mismatch/mean:.0f}% apart)"
@@ -697,7 +778,9 @@ def phase_motion(node: Preflight, args) -> Phase:
             p.add("wheels matched", PASS, detail)
 
     # Odometry has to agree with what the wheels are doing, or the map drifts.
-    if odom_vx is not None and not math.isnan(odom_vx):
+    # Only meaningful while the wheels are actually turning: 0 == 0 agrees
+    # perfectly and proves nothing.
+    if moved and odom_vx is not None and not math.isnan(odom_vx):
         expected = 0.5 * (left + right)
         close = abs(odom_vx - expected) < max(15.0, 0.25 * abs(expected))
         p.add("odom twist", PASS if close else WARN,
@@ -731,7 +814,20 @@ def phase_motion(node: Preflight, args) -> Phase:
               "A CCW turn must drive the left wheel back and the right wheel "
               "forward. Swapped wheels would put SLAM's rotation backwards.")
         if not math.isnan(yaw_rate):
-            if yaw_rate * expected_deg < 0:
+            # This script insists the robot is ON BLOCKS, and a robot on blocks
+            # does not turn: the wheels spin in the air and the gyro sees only
+            # its own bias. The sign of a near-zero reading is noise, so calling
+            # it "inverted" is wrong every time. Judge the sign only when there
+            # is real rotation to judge; below that, say the check did not run.
+            noise_floor = max(2.0, 0.2 * abs(expected_deg))
+            if abs(yaw_rate) < noise_floor:
+                p.add("rotate: IMU agrees", SKIP,
+                      f"commanded {expected_deg:+.0f} deg/s, IMU reads "
+                      f"{yaw_rate:+.1f} -- the chassis is not turning (on "
+                      f"blocks), so the yaw sign is unverified. Check it on the "
+                      f"floor: rotate the robot left by hand and confirm "
+                      f"/imu/data yaw increases (README, IMU direction).")
+            elif yaw_rate * expected_deg < 0:
                 p.add("rotate: IMU agrees", FAIL,
                       f"commanded {expected_deg:+.0f} deg/s, IMU reads {yaw_rate:+.0f}",
                       "Yaw is inverted relative to the command. Flip IMU_YAW_SIGN "
