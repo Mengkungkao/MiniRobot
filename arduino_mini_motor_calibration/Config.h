@@ -17,7 +17,7 @@
 const uint32_t SERIAL_BAUD = 500000UL;
 
 // -----------------------------------------------------------------------------
-// Calibration behaviour
+// Fit acceptance
 // -----------------------------------------------------------------------------
 
 // Points slower than this are stiction/dead-zone, where speed is not linear in
@@ -28,6 +28,40 @@ const float MIN_VALID_SPEED_MM_S = 15.0f;
 // Below this the fit is not trustworthy enough to paste (loose gearbox, a
 // dragging wheel, or a battery that sagged during the sweep).
 const float MIN_ACCEPTABLE_R2 = 0.97f;
+
+// -----------------------------------------------------------------------------
+// DIR -- direction commissioning
+// -----------------------------------------------------------------------------
+//
+// DIR spins one wheel at a fixed pin polarity, asks the operator which way the
+// robot tried to roll, and derives BOTH signs from that one answer. See
+// Direction.cpp for why that is the only way to get them right.
+
+// Slow enough that the direction of rotation is obvious to the eye -- roughly
+// two thirds of a wheel turn per second on this robot -- and still five times
+// the measured break-away PWM. A probe fast enough to blur is a probe the
+// operator answers by guessing.
+const uint16_t DIR_PROBE_PWM = 40;
+
+// Retry PWM for a wheel that did not break away at DIR_PROBE_PWM: a stiff
+// gearbox and a dead encoder look identical at one PWM and quite different at
+// two.
+const uint16_t DIR_PROBE_PWM_RETRY = 90;
+
+const uint16_t DIR_SETTLE_MS = 300;    // let it reach a steady speed
+const uint16_t DIR_WINDOW_MS = 1200;   // then hold it long enough to be watched
+
+// Counts below this over a whole DIR window mean the encoder is not reporting
+// rotation, not that the wheel turned slowly: the probe above produces several
+// hundred.
+const int32_t DIR_MIN_TICKS = 20;
+
+// How long DIR waits for the operator to answer before giving up and coasting.
+const uint32_t ANSWER_TIMEOUT_MS = 120000UL;
+
+// -----------------------------------------------------------------------------
+// VERIFY
+// -----------------------------------------------------------------------------
 
 // Target speeds VERIFY drives, in mm/s.
 const float VERIFY_SPEEDS_MM_S[] = {60.0f, 120.0f, 180.0f, 240.0f};
@@ -48,6 +82,11 @@ extern uint16_t sweepStepPWM;
 extern uint16_t settleMs;      // let the wheel reach steady state
 extern uint16_t windowMs;      // then count ticks for this long
 extern uint8_t sweepPasses;    // 2 = ascending then descending
+
+// A line needs more than two points to mean anything, and both passes visit the
+// same PWM values, so a sweep with fewer distinct steps than this is refused
+// before it wastes a minute.
+const uint16_t MIN_SWEEP_STEPS = 4;
 
 // Direction slots used to index the results table.
 const uint8_t FWD = 0;

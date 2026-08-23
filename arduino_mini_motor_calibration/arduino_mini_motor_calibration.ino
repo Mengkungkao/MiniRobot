@@ -20,9 +20,13 @@
   by tens of percent and are direction-asymmetric; that asymmetry is what makes
   a robot drive straight forward and curve in reverse.
 
+  It also commissions the two direction signs in MiniRobotGeometry.h, because
+  a fit is meaningless until "forward" means the same thing to the encoder, to
+  the motor and to the robot. See DIR below.
+
   It is a bench tool: no IMU, no odometry, no PID, no ROS protocol. Flash it,
-  calibrate, paste the printed constants into the firmware's Config.h, then
-  flash the main firmware back.
+  calibrate, paste the printed constants into the firmware, then flash the main
+  firmware back.
 
   The pin map, wheel geometry and commissioning signs live in the MiniRobot*
   files in this folder, which are kept byte-identical to the copies in
@@ -31,14 +35,12 @@
   fit scaled by the same numbers. If you edit one copy, copy it to the other.
 
   Sketch layout (the IDE compiles every .cpp/.h in this folder):
-    Config.h            baud, fit thresholds, sweep settings
-    LinearFit.h         Welford streaming least-squares
-    FitResults.h/.cpp   the results table and the paste-ready constants block
-    CalUtil.h/.cpp      abort handling, timing, one speed measurement
-    Sweep.h/.cpp        the PWM sweep and the fit
-    Verify.h/.cpp       open-loop check of the fitted constants
-    Interactive.h/.cpp  HOLD, TICKS, CONFIG, HELP
-    CommandParser.h/.cpp  the serial command set
+    Config.h            baud, fit thresholds, DIR and sweep settings
+    Direction.h/.cpp    the session signs, DIR and CHECK
+    Measure.h/.cpp      abort handling, one speed measurement, HOLD, TICKS
+    Fit.h/.cpp          least squares, the results table, the paste block
+    Sweep.h/.cpp        the PWM sweep, CAL and VERIFY
+    Commands.h/.cpp     the serial command set, CONFIG and HELP
     arduino_mini_motor_calibration.ino  setup()/loop() only
 
   HOW TO USE IT
@@ -51,36 +53,35 @@
   3. Flash this sketch and open a serial terminal at 500000 baud. Any line
      ending works -- "Newline", "Carriage return" or "Both NL & CR".
   4. Check MEASURED_COUNTS_PER_REV in MiniRobotGeometry.h (this folder) is
-     right for your encoders. Everything printed here is
-     in mm/s derived from it, so if it is wrong the whole fit is wrong by the
-     same factor. Verify with:  TICKS,20
+     right for your encoders. Everything printed here is in mm/s derived from
+     it, so if it is wrong the whole fit is wrong by the same factor. Verify
+     with:  TICKS,20
      then turn one wheel by hand exactly one full turn and read the total.
-  5. Run:  CHECK
-     Four seconds. Every wheel must report OK. A wheel that reports
-     NO_ENCODER_MOTION or BACKWARDS cannot be fitted, and CAL will hand back
-     a 0.000f NOT_CALIBRATED placeholder for it instead of a slope.
+  5. Run:  DIR
+     Thirty seconds, and it is not optional.
 
-     BACKWARDS is a sign, not a fault, and it has two causes that look
-     identical from the encoder: the motor spins the wrong way, or the encoder
-     counts the wrong way. Only looking at the wheel separates them. Run
-     HOLD,<motor>,105 and watch which way it rolls:
+     DIR spins each wheel at a fixed driver polarity, ignoring both signs, and
+     asks you which way the robot tried to roll. From that one answer it
+     derives BOTH signs at once -- which polarity means forward
+     (MOTOR_DIRECTION_SIGN) and which way the encoder counts when it does
+     (ENCODER_SIGN) -- then drives the wheel forward through them to confirm.
 
-       rolls the robot BACKWARD -> the motor is reversed -> SIGN,<motor>,MOT,-1
-       rolls the robot FORWARD  -> the encoder is reversed -> SIGN,<motor>,ENC,-1
+     Answer by watching the WHEEL, not the numbers. The encoder cannot see the
+     robot: it only knows its own count went up or down, and both signs sit
+     between that count and the robot frame. Flip either one alone and the
+     reported speed changes sign; flip BOTH and it does not, but the wheel now
+     turns the other way. That pair is the failure DIR exists to prevent -- it
+     reports a healthy positive speed while the robot drives away backwards,
+     the fit succeeds, and the PID agrees with itself the whole time.
 
-     SIGN changes the value for this session only, so you can settle both
-     wheels and then measure everything in ONE CAL run instead of re-flashing
-     between guesses. Re-run CHECK until every wheel says OK. Whatever the
-     signs end up as is printed with the results, ready to paste into
-     MiniRobotGeometry.h in BOTH sketch folders.
-
-     Getting this wrong is worse than leaving it: flipping ENCODER_SIGN on a
-     motor that is genuinely reversed makes the fit succeed and the PID agree
-     with itself while the robot turns instead of driving straight.
+     Whatever the signs end up as is printed ready to paste into
+     MiniRobotGeometry.h in BOTH sketch folders. Nothing is persisted, so a
+     session that ends without pasting them measured a robot that does not
+     exist yet.
   6. Sweep the range you actually drive in. The firmware clamps each wheel to
-     MAX_WHEEL_MM_S, so if CHECK reports (say) 450 mm/s at PWM 105 the robot
-     will never ask for more than about PWM 60, and a 30..210 sweep spends most
-     of its points where the robot never operates. Narrow it:  RANGE,10,80
+     MAX_WHEEL_MM_S, so if a wheel reaches 450 mm/s at PWM 105 the robot will
+     never ask for more than about PWM 60, and a 10..210 sweep spends most of
+     its points where the robot never operates. Narrow it:  RANGE,8,60
   7. Run:  CAL
      A few minutes: both wheels, both directions, two passes each.
   8. Paste the printed "const float FF_..." block into
@@ -93,10 +94,16 @@
 
   Sending any character while a sweep is running aborts it and coasts the
   motors. Bare line endings do not count, so a terminal that appends CR+LF
-  cannot abort the very run it just started.
+  cannot abort the very run it just started. DIR's probes are the exception:
+  they are under two seconds each and swallow whatever you type, because a
+  keystroke there is far more likely to be an early answer than an abort.
 
   COMMANDS
   ------------------------------------------------------------
+    DIR                        commission both signs from one look per wheel
+    DIR,<motor>                ... for one wheel only
+    CHECK                      drive each wheel forward, check the encoder agrees
+    SIGN                       print the commissioning signs
     CAL                        calibrate both motors, both directions
     CAL,<motor>                one motor (1 = left, 2 = right), both directions
     SWEEP,<motor>[,R]          one motor, one direction (R = reverse)
@@ -104,12 +111,9 @@
     VERIFY,<motor>             ... for one motor
     RESULT                     reprint the last fit table and constants block
     HOLD,<motor>,<pwm>[,R]     hold one PWM and stream the measured speed
-    CHECK                      pulse each wheel, report the encoder sign
-    SIGN                       print the commissioning signs
-    SIGN,<motor>,<ENC|MOT>,<1|-1>  set one for THIS SESSION, no re-flash
     TICKS[,<seconds>]          stream raw encoder counts (counts-per-rev check)
     STEP,<pwm_step>            PWM step size             (default 10)
-    RANGE,<min_pwm>,<max_pwm>  PWM sweep range           (default 30..210)
+    RANGE,<min_pwm>,<max_pwm>  PWM sweep range           (default 10..210)
     DWELL,<settle_ms>,<win_ms> per-step timing           (default 400, 600)
     PASSES,<1_to_4>            sweep passes per direction (default 2: up, down)
     CONFIG                     print the current sweep settings
@@ -121,6 +125,8 @@
     C,<motor>,<F|R>,<pwm>,<mm_s>,<USED|STALL>   one measured point
     R,<motor>,<F|R>,<slope>,<intercept>,<r2>,<n>,<deadzone_pwm>,<mm_s_at_max>
     V,<motor>,<F|R>,<target_mm_s>,<measured_mm_s>,<error_pct>
+    DIR,<motor>,F,<pwm>,<mm_s>,<OK|FAILED>      DIR's post-commission self check
+    ASK,...                                     DIR is waiting for F, B or X
     CHECK,<motor>,F,<pwm>,<mm_s>,<OK|BACKWARDS|NO_ENCODER_MOTION>
     SIGN,<motor>,ENC,<sign>,MOT,<sign>
     TICKS,<left>,<right>
@@ -137,11 +143,10 @@
 #include "MiniRobotEncoders.h"
 #include "MiniRobotMotors.h"
 
-#include "CommandParser.h"
+#include "Commands.h"
 #include "Config.h"
-#include "FitResults.h"
-#include "Interactive.h"
-#include "Signs.h"
+#include "Direction.h"
+#include "Fit.h"
 
 void setup() {
   Serial.begin(SERIAL_BAUD);
@@ -155,9 +160,9 @@ void setup() {
   delay(200);
 
   Serial.println();
-  Serial.println(F("READY,mini_motor_ff_calibration_v1"));
+  Serial.println(F("READY,mini_motor_ff_calibration_v2"));
   Serial.println(F("WARN,PUT_THE_ROBOT_ON_BLOCKS_BOTH_WHEELS_MUST_SPIN_FREE"));
-  Serial.println(F("INFO,SEND_CAL_TO_START_OR_HELP_FOR_COMMANDS"));
+  Serial.println(F("INFO,RUN,DIR,FIRST_THEN,CAL,OR,HELP,FOR_COMMANDS"));
   printConfig();
 }
 

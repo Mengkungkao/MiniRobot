@@ -91,16 +91,14 @@ arduino_mini_motor_calibration/        bench sketch: measures and fits the
   arduino_mini_motor_calibration.ino    feed-forward motor constants (section 7)
   MiniRobot*.h/.cpp                    byte-identical copies of the six
                                          shared-layer files above
-  Signs.h/.cpp                         ENCODER_SIGN / MOTOR_DIRECTION_SIGN
-                                         overrides for a wheel wired backwards
-  Config.h                             baud, fit thresholds, sweep settings
-  LinearFit.h                          Welford streaming least-squares
-  FitResults.h/.cpp                    results table + paste-ready constants
-  CalUtil.h/.cpp                       abort handling, one speed measurement
-  Sweep.h/.cpp                         the PWM sweep and the fit
-  Verify.h/.cpp                        open-loop check of the fitted constants
-  Interactive.h/.cpp                   HOLD, TICKS, CONFIG, HELP
-  CommandParser.h/.cpp                 serial command set
+  Config.h                             baud, fit thresholds, DIR and sweep
+                                         settings
+  Direction.h/.cpp                     the session signs, DIR and CHECK
+  Measure.h/.cpp                       abort handling, one speed measurement,
+                                         HOLD, TICKS
+  Fit.h/.cpp                           least squares, results table, paste block
+  Sweep.h/.cpp                         the PWM sweep, CAL and VERIFY
+  Commands.h/.cpp                      serial command set, CONFIG, HELP
   README.md                            full reference for that sketch
   Calibration_results.md               log of a past CAL run
 arduino_mini_imu_calibration/          bench sketch: measures the IMU constants
@@ -315,6 +313,21 @@ put the robot on blocks so both wheels spin free, open a serial terminal at
 500000 baud and send:
 
 ```text
+DIR
+```
+
+`DIR` commissions the two direction signs first, and it is not optional. It
+spins each wheel at a fixed driver polarity with no signs applied, asks which
+way the robot tried to roll, and derives both `MOTOR_DIRECTION_SIGN` and
+`ENCODER_SIGN` from your answer. Answer by watching the wheel, not the numbers:
+a wheel with **both** signs wrong reports a perfectly healthy positive speed
+while turning backwards, and no measurement the robot can make will catch it.
+Paste the `SIGN` block it prints into `MiniRobotGeometry.h` in both sketch
+folders.
+
+Then send:
+
+```text
 CAL
 ```
 
@@ -332,8 +345,9 @@ const float FF_INTERCEPT_MM_S_FWD[MOTOR_COUNT] = {-71.20f, -76.85f};
 Then send `VERIFY`: it drives a few target speeds through the fresh fit open
 loop and reports the error at each. Under ~10% is good; PID absorbs the rest.
 Send `HELP` for the rest of the commands (`TICKS` for counts-per-rev, `HOLD`
-for a single-point spot check, `RANGE`/`STEP`/`DWELL`/`PASSES` to retune the
-sweep). Any character aborts a running sweep.
+for a single-point spot check, `CHECK` for a four-second re-test of the signs,
+`RANGE`/`STEP`/`DWELL`/`PASSES` to retune the sweep). Any character aborts a
+running sweep.
 
 Re-flash the main firmware when you are done.
 
@@ -422,7 +436,7 @@ as the IDE defaults to):
 | Sketch | Flash (of 32256) | SRAM (of 2048) |
 | --- | --- | --- |
 | `arduino_mini_base_controller` | 27554 B (85%) | 1102 B (54%) |
-| `arduino_mini_motor_calibration` | 17292 B (54%) | 497 B (24%) |
+| `arduino_mini_motor_calibration` | 18854 B (58%) | 489 B (24%) |
 | `arduino_mini_imu_calibration` | 30326 B (94%) | 791 B (39%) |
 
 Splitting the firmware into modules cost nothing in SRAM. Duplicating the shared
@@ -859,6 +873,7 @@ extrapolation nothing has ever checked. Re-calibrate over the band that is
 actually used -- in `arduino_mini_motor_calibration/`, at 500000 baud:
 
 ```text
+DIR
 RANGE,8,60
 STEP,2
 CAL
@@ -877,23 +892,32 @@ real speed. Worth reading once: it shows that a wrong
 invisible from inside the robot, which is why the distance check below is not
 optional.
 
-### Encoder direction
+### Wheel direction
 
-Command slow forward motion. Both wheel speed values in Arduino telemetry must
-be positive. If one is negative, flip that entry in:
+`ENCODER_SIGN` and `MOTOR_DIRECTION_SIGN` are not two independent checks, and
+fixing them one at a time is how a robot ends up driving backwards while every
+number reads correctly. Both sit between the encoder count and the robot frame:
 
-```cpp
-const int8_t ENCODER_SIGN[MOTOR_COUNT]
+```text
+reported_speed = raw_ticks(polarity chosen by MOTOR_DIRECTION_SIGN) * ENCODER_SIGN
 ```
 
-### Motor direction
+Flip either one alone and the reported speed changes sign. Flip **both** on the
+same wheel and it does not — but that wheel now physically turns the other way.
+Telemetry, `/odom`, RViz and the PID all agree it is fine. Nothing inside the
+robot can see it.
 
-If a wheel physically spins backwards when the firmware asks for forward, flip
-that entry in:
+So do not derive them from telemetry. Flash
+`arduino_mini_motor_calibration/` and send `DIR`: it spins each wheel at a
+fixed driver polarity with no signs applied, asks which way the robot tried to
+roll, and derives both signs from that one answer, then confirms them. Paste
+the `SIGN` block it prints into `MiniRobotGeometry.h` in **both** sketch
+folders — it is `const` and shared, so the copies must match.
 
-```cpp
-const int8_t MOTOR_DIRECTION_SIGN[MOTOR_COUNT]
-```
+Telemetry is still the right check *afterwards*: command slow forward motion
+and confirm both wheel speeds read positive **and** that the top of both wheels
+moves toward the front of the robot. The second half is not optional; it is the
+half the robot cannot do for you.
 
 ### IMU direction
 
