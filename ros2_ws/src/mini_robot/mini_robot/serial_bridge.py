@@ -100,7 +100,7 @@ class SerialBridge(Node):
         # Connection, topic naming, frame, and kinematic parameters. The
         # velocity limits clamp incoming commands before they reach the
         # Arduino; wheel geometry converts encoder ticks to joint states.
-        self.declare_parameter('port', '/dev/ttyUSB0')
+        self.declare_parameter('port', '/dev/ttyUSB1')
         self.declare_parameter('baud', 500000)
         self.declare_parameter('cmd_vel_topic', '/cmd_vel_out')
         self.declare_parameter('odom_topic', '/odom')
@@ -125,6 +125,18 @@ class SerialBridge(Node):
         # wrong rate in RViz while the robot still drives correctly.
         self.declare_parameter('counts_per_rev', 520.0)
         self.declare_parameter('serial_stale_s', 0.5)
+        # The LiDAR faces the caster end of the chassis, so that end is the
+        # robot's front and base_footprint +x points at it. The Arduino still
+        # calls the drive-axle end "forward", so this bridge is where the two
+        # conventions meet. True applies the 180 deg yaw rotation between them
+        # (ROS base frame = Arduino frame rotated pi about z) to everything
+        # crossing the link: velocity commands out, odometry and wheel states
+        # in. Rotation about z is invariant under that rotation, so angular
+        # velocity and yaw are never touched - only the x/y quantities flip.
+        # Set False only if the LiDAR is remounted facing the axle end; the
+        # matching geometry lives in caster_x / imu_joint
+        # (mini_robot.urdf.xacro) and the costmap footprint (nav2_params.yaml).
+        self.declare_parameter('reverse_base_direction', True)
 
         self.port = str(self.get_parameter('port').value)
         self.baud = int(self.get_parameter('baud').value)
@@ -138,6 +150,9 @@ class SerialBridge(Node):
         self.counts_per_rev = float(self.get_parameter('counts_per_rev').value)
         self.serial_stale_s = float(self.get_parameter('serial_stale_s').value)
         self.reconnect_period_s = float(self.get_parameter('reconnect_period_s').value)
+        self.reverse_base = bool(self.get_parameter('reverse_base_direction').value)
+        # Sign applied to every x/y quantity crossing the Arduino boundary.
+        self.base_sign = -1.0 if self.reverse_base else 1.0
 
         cmd_topic = str(self.get_parameter('cmd_vel_topic').value)
         odom_topic = str(self.get_parameter('odom_topic').value)
@@ -194,6 +209,12 @@ class SerialBridge(Node):
             f'mini serial bridge ready: {self.port} @ {self.baud} baud, '
             f'cmd_vel={cmd_topic}, odom={odom_topic}'
         )
+        if self.reverse_base:
+            self.get_logger().info(
+                'base direction REVERSED: the caster/LiDAR end is the front. '
+                'A positive cmd_vel linear.x is sent to the Arduino as a '
+                'negative VEL, and odometry x/y and the wheel pair are flipped '
+                'back on the way in.')
 
     def connect_serial(self) -> bool:
         # Open the Arduino port if it is not already open. Reconnect attempts
@@ -271,8 +292,11 @@ class SerialBridge(Node):
             if self.last_cmd.linear.x or self.last_cmd.angular.z:
                 self.get_logger().warning('velocity command suppressed: e-stop is latched', throttle_duration_sec=2.0)
             return
-        # Convert ROS units (m/s, rad/s) to Arduino units (mm/s, deg/s).
-        linear_mm_s = self.last_cmd.linear.x * 1000.0
+        # Convert ROS units (m/s, rad/s) to Arduino units (mm/s, deg/s), and
+        # rotate out of the ROS base frame into the Arduino's. Only linear x
+        # changes sign: a 180 deg yaw rotation leaves rotation about z alone,
+        # so "turn left" is still turn left whichever end leads.
+        linear_mm_s = self.last_cmd.linear.x * 1000.0 * self.base_sign
         angular_deg_s = math.degrees(self.last_cmd.angular.z)
         self.send_line(f'VEL,{linear_mm_s:.2f},{angular_deg_s:.2f}')
         # Driving heartbeat: commanded vs measured, so a command that reaches
@@ -392,11 +416,15 @@ class SerialBridge(Node):
         odom.header.stamp = stamp
         odom.header.frame_id = self.odom_frame
         odom.child_frame_id = self.base_frame
-        odom.pose.pose.position.x = data.x_mm / 1000.0
-        odom.pose.pose.position.y = data.y_mm / 1000.0
+        # base_sign rotates the Arduino's pose into the ROS base frame. The
+        # odom frame is taken to be rotated by the same pi about its origin,
+        # which is why the position flips but the yaw does not: the robot
+        # still starts at yaw 0 and turning left still increases it.
+        odom.pose.pose.position.x = self.base_sign * data.x_mm / 1000.0
+        odom.pose.pose.position.y = self.base_sign * data.y_mm / 1000.0
         odom.pose.pose.position.z = 0.0
         odom.pose.pose.orientation = planar_q
-        odom.twist.twist.linear.x = data.vx_mm_s / 1000.0
+        odom.twist.twist.linear.x = self.base_sign * data.vx_mm_s / 1000.0
         odom.twist.twist.angular.z = math.radians(data.wz_deg_s)
         odom.pose.covariance = [
             0.02, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -457,13 +485,21 @@ class SerialBridge(Node):
         # rim speed (mm/s) -> angular velocity (rad/s).
         joint = JointState()
         joint.header.stamp = stamp
-        # Order matches the Arduino motor numbering: 1 LEFT, 2 RIGHT.
+        # URDF naming: left_wheel_joint is the wheel on the base frame's +y
+        # side. Arduino numbering is 1 LEFT, 2 RIGHT in ITS frame, so with the
+        # base reversed the wheel on ROS-left is Arduino motor 2, and its joint
+        # axis points the opposite way - hence swap the pair and negate both.
         joint.name = ['left_wheel_joint', 'right_wheel_joint']
+        ticks = data.ticks
+        wheel_speed_mm_s = data.wheel_speed_mm_s
+        if self.reverse_base:
+            ticks = [-ticks[1], -ticks[0]]
+            wheel_speed_mm_s = [-wheel_speed_mm_s[1], -wheel_speed_mm_s[0]]
         radians_per_tick = 2.0 * math.pi / self.counts_per_rev
-        joint.position = [tick * radians_per_tick for tick in data.ticks]
+        joint.position = [tick * radians_per_tick for tick in ticks]
         joint.velocity = [
             (speed_mm_s / 1000.0) / self.wheel_radius
-            for speed_mm_s in data.wheel_speed_mm_s
+            for speed_mm_s in wheel_speed_mm_s
         ]
         self.joint_pub.publish(joint)
 

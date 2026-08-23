@@ -19,6 +19,13 @@ mini_serial_bridge:
     # Only affects the wheel angles in /joint_states (RViz animation), not
     # odometry, which the Arduino integrates itself.
     counts_per_rev: 520.0
+    # The LiDAR faces the caster end, so that end is the robot's front while
+    # the Arduino still calls the drive-axle end forward. True rotates every
+    # x/y quantity crossing the serial link by 180 deg, so a positive
+    # cmd_vel linear.x drives towards the LiDAR. Change this together with
+    # caster_x / imu_joint in mini_robot.urdf.xacro and the costmap footprint
+    # in nav2_params.yaml -- they describe the same physical decision.
+    reverse_base_direction: true
 
 mini_cmd_mux:
   ros__parameters:

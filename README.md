@@ -71,6 +71,28 @@ Odometry follows ROS conventions:
 - positive yaw: counter-clockwise/left turn
 - TF chain while mapping: `map -> odom -> base_footprint -> base_link -> laser`
 
+### Which end is the front
+
+The **caster end is the front**: the COIN-D6 sits above the caster with its own
+zero mark pointing that way, so `base_link +X`, LiDAR angle zero and "drive
+forward" all agree. The drive axle trails.
+
+The Arduino does not share that convention. Its odometry and `VEL` command use
+the opposite sense — for the firmware, "forward" is towards the axle end — and
+nothing in the sketch needs to change for this. The whole 180-degree rotation
+lives in one place on the Pi, `reverse_base_direction` in `config/base.yaml`:
+
+| where | what it does when reversed |
+| --- | --- |
+| `serial_bridge.py` | negates `linear.x` on the way out, and odometry `x`/`y`, `vx` plus the wheel pair (swapped and negated) on the way in |
+| `urdf/mini_robot.urdf.xacro` | `caster_x`/`body_x` positive so the caster and laser sit at `+X`; `imu_joint` yawed by `pi` because the chip still faces the axle end |
+| `config/nav2_params.yaml` | costmap footprint reaches further ahead of the axle than behind it |
+
+Yaw and angular velocity are never touched — rotation about Z is unchanged by a
+180-degree yaw rotation, so a left turn is a left turn whichever end leads.
+These four files describe one physical decision; change them together or the
+map and the robot will disagree.
+
 ## 3. Folder structure
 
 ```text
@@ -1029,8 +1051,13 @@ published to ROS still comes from the IMU.
 
 ### LiDAR alignment
 
-A wall directly in front must appear at angle zero in `/scan`. Adjust the
-`laser_joint` yaw in the URDF if the scan is rotated in RViz.
+A wall directly in front — in front meaning the caster end, see section 2 —
+must appear at angle zero in `/scan`. Adjust the `laser_joint` yaw in the URDF
+if the scan is rotated in RViz.
+
+If the whole scan looks 180 degrees out, check `reverse_base_direction` before
+touching `laser_joint`: a scan that is exactly backwards usually means the
+LiDAR's zero and the driving direction disagree, not that the mount is off.
 
 ## 20. Safety notes
 

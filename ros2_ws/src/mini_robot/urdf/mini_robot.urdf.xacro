@@ -1,9 +1,14 @@
 <?xml version="1.0"?>
 <!-- Two-wheel differential drive base: one driven wheel per side on the
-     transverse axis, plus a passive caster behind them for the third contact
-     point. Dimensions are nominal; the ones that actually matter to the
-     software are 'track' (must match TRACK_WIDTH_MM in the sketch) and
-     'wheel_radius' (must match WHEEL_DIAMETER_MM / 2). -->
+     transverse axis, plus a passive caster for the third contact point.
+     The LiDAR points along the caster end, so THAT end is the robot's front
+     and +x runs towards it: the caster leads and the drive axle trails. The
+     Arduino uses the opposite convention (its "forward" is the axle end);
+     serial_bridge's reverse_base_direction parameter is what reconciles the
+     two, and must stay in step with the signs below.
+     Dimensions are nominal; the ones that actually matter to the software are
+     'track' (must match TRACK_WIDTH_MM in the sketch) and 'wheel_radius'
+     (must match WHEEL_DIAMETER_MM / 2). -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="mini_robot">
   <xacro:property name="base_length" value="0.18"/>
   <xacro:property name="base_width" value="0.16"/>
@@ -18,13 +23,14 @@
        offset here would put the model's centre of rotation somewhere the
        odometry is not, which mis-places the laser whenever the robot turns. -->
   <xacro:property name="axle_x" value="0.0"/>
-  <!-- Passive trolley caster, on the centreline, 100 mm behind the drive axle. -->
-  <xacro:property name="caster_x" value="-0.10"/>
+  <!-- Passive trolley caster, on the centreline, 100 mm ahead of the drive
+       axle: it is the leading end, under the LiDAR. -->
+  <xacro:property name="caster_x" value="0.10"/>
   <xacro:property name="caster_radius" value="0.015"/>
   <!-- COIN-D6 sits directly above the caster, 100 mm above the ground. -->
   <xacro:property name="laser_height" value="0.10"/>
-  <!-- Body box is nominal/visual only; offset back so it spans axle to caster. -->
-  <xacro:property name="body_x" value="-0.035"/>
+  <!-- Body box is nominal/visual only; offset forward so it spans axle to caster. -->
+  <xacro:property name="body_x" value="0.035"/>
 
   <material name="body"><color rgba="0.15 0.35 0.65 1"/></material>
   <material name="wheel"><color rgba="0.05 0.05 0.05 1"/></material>
@@ -72,14 +78,19 @@
     <origin xyz="${caster_x} 0 ${caster_radius - wheel_radius}" rpy="0 0 0"/>
   </joint>
 
-  <!-- COIN-D6. If a wall straight ahead does not appear at angle zero in
-       /scan, correct the yaw in this joint's rpy rather than in the driver. -->
+  <!-- COIN-D6, above the caster. The unit is mounted with its own zero facing
+       the caster end, i.e. along base_link +x, so no yaw offset is needed here.
+       If a wall straight ahead does not appear at angle zero in /scan, correct
+       the yaw in this joint's rpy rather than in the driver. -->
   <link name="laser">
     <visual><geometry><cylinder radius="0.035" length="0.035"/></geometry><material name="sensor"/></visual>
   </link>
   <joint name="laser_joint" type="fixed"><parent link="base_link"/><child link="laser"/><origin xyz="${caster_x} 0 ${laser_height - wheel_radius}" rpy="0 0 0"/></joint>
 
-  <!-- MPU9250/9255/6500. Frame of the /imu/data message. -->
+  <!-- MPU9250/9255/6500. Frame of the /imu/data message. The chip is mounted
+       facing the axle end, which is now the rear, so imu_link is yawed 180 deg
+       from base_link. The bridge republishes the Arduino's IMU fields
+       unchanged; this joint is what tells TF which way they point. -->
   <link name="imu_link"/>
-  <joint name="imu_joint" type="fixed"><parent link="base_link"/><child link="imu_link"/><origin xyz="0 0 ${base_height}" rpy="0 0 0"/></joint>
+  <joint name="imu_joint" type="fixed"><parent link="base_link"/><child link="imu_link"/><origin xyz="0 0 ${base_height}" rpy="0 0 ${pi}"/></joint>
 </robot>
