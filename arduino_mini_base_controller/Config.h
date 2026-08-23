@@ -89,10 +89,10 @@ const float ANGULAR_ACCEL_DEG_S2 = 120.0f;
 // Each step prints "C,<motor>,<F|R>,<pwm>,<measured_mm_s>". Drop the stalled
 // points at the bottom of the sweep, least-squares fit the rest, and paste the
 // slope/intercept here.
-const float FF_SLOPE_MM_S_PER_PWM_FWD[MOTOR_COUNT] = {6.1387f, 6.2588f};
-const float FF_INTERCEPT_MM_S_FWD[MOTOR_COUNT] = {-39.16f, -42.70f};
-const float FF_SLOPE_MM_S_PER_PWM_REV[MOTOR_COUNT] = {6.4735f, 6.1156f};
-const float FF_INTERCEPT_MM_S_REV[MOTOR_COUNT] = {-45.09f, -42.85f};
+const float FF_SLOPE_MM_S_PER_PWM_FWD[MOTOR_COUNT] = {6.4448f, 6.1370f};
+const float FF_INTERCEPT_MM_S_FWD[MOTOR_COUNT] = {-43.43f, -45.41f};
+const float FF_SLOPE_MM_S_PER_PWM_REV[MOTOR_COUNT] = {6.2414f, 6.3233f};
+const float FF_INTERCEPT_MM_S_REV[MOTOR_COUNT] = {-43.24f, -48.20f};
 
 // Lowest PWM the SWEEP calibration command starts from.
 //

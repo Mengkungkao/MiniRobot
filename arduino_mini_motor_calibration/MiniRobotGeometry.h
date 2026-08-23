@@ -70,7 +70,7 @@ const uint8_t MAX_DRIVE_PWM = 210;
 // the top of both wheels must move toward the FRONT of the robot on a forward
 // command. A wheel that measures positive while turning the wrong way is a
 // MOTOR_DIRECTION_SIGN problem, not an ENCODER_SIGN one.
-const int8_t ENCODER_SIGN[MOTOR_COUNT] = {1, -1};
+const int8_t ENCODER_SIGN[MOTOR_COUNT] = {-1, 1};
 
 // COMMISSIONING VALUE. If a wheel physically spins backwards when the firmware
 // asks for forward, flip its sign here rather than swapping the motor leads.
@@ -84,4 +84,4 @@ const int8_t ENCODER_SIGN[MOTOR_COUNT] = {1, -1};
 // encoder above, and reported motor 2 as WHEEL_MEASURED_BACKWARDS through both
 // sweeps (arduino_mini_motor_calibration/Calibration_results.md). That report
 // says a sign is wrong somewhere in the channel; it cannot say which.
-const int8_t MOTOR_DIRECTION_SIGN[MOTOR_COUNT] = {1, -1};
+const int8_t MOTOR_DIRECTION_SIGN[MOTOR_COUNT] = {-1, -1};
