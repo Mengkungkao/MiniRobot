@@ -170,7 +170,7 @@ local_costmap:
       resolution: 0.05
       # base_footprint is the drive axle, and the caster/LiDAR end leads, so
       # the body reaches 120 mm ahead of the axle and only 60 mm behind it.
-      # Mirror this if reverse_base_direction / caster_x ever change.
+      # Mirror this if caster_x or WHEEL_Y_SIGN ever change.
       footprint: "[[0.12, 0.115], [0.12, -0.115], [-0.06, -0.115], [-0.06, 0.115]]"
       plugins: [voxel_layer, inflation_layer]
       voxel_layer:

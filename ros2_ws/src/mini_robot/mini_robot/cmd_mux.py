@@ -28,14 +28,22 @@ class CmdMux(Node):
         #   front_stop_distance  - obstacle range (m) below which forward motion is blocked
         #   front_half_angle_deg - half-width of the forward LiDAR sector to check
         #   source_timeout       - seconds after which a velocity source is considered stale
+        #   scan_timeout         - seconds after which /scan data is too old to gate on
+        #   require_scan         - with no usable /scan, block forward motion (True)
+        #                          or pass it through ungated (False)
         self.declare_parameter('front_stop_distance',0.30); self.declare_parameter('front_half_angle_deg',45.0); self.declare_parameter('source_timeout',0.4)
+        self.declare_parameter('scan_timeout',1.0); self.declare_parameter('require_scan',False)
         self.stop=float(self.get_parameter('front_stop_distance').value); self.half=math.radians(float(self.get_parameter('front_half_angle_deg').value)); self.timeout=float(self.get_parameter('source_timeout').value)
+        self.scan_timeout=float(self.get_parameter('scan_timeout').value); self.require_scan=bool(self.get_parameter('require_scan').value)
         # Each source holds (last Twist, monotonic receive time); 0. means "never received".
         # 'blocked' is the latest verdict of the front-sector obstacle check.
         self.nav=(Twist(),0.); self.tele=(Twist(),0.); self.manual=(Twist(),0.); self.blocked=False
         # Operational state kept for logging: nearest front range, scan arrival
         # time, and the last source/blocked values so transitions log once.
         self.nearest=float('inf'); self.last_scan_t=0.; self.last_source='(none yet)'
+        # Whether the gate currently has data to work with, so the "no LiDAR"
+        # transition is logged once rather than every tick.
+        self.scan_usable=None
         # Arbitrated output consumed by the Arduino serial bridge.
         self.pub=self.create_publisher(Twist,'/cmd_vel_out',20)
         # Inputs: Nav2 on /cmd_vel (see module docstring), keyboard teleop,
@@ -77,22 +85,35 @@ class CmdMux(Node):
         if source!=self.last_source:
             self.get_logger().info(f'velocity source: {self.last_source} -> {source}')
             self.last_source=source
+        # Is there LiDAR data recent enough to gate on? Never having received a
+        # scan and having stopped receiving them are the same situation for the
+        # gate: it has nothing to judge by.
+        usable=bool(self.last_scan_t) and (now-self.last_scan_t)<=self.scan_timeout
+        if usable!=self.scan_usable:
+            if usable: self.get_logger().info('front stop gate active: /scan is flowing')
+            elif self.require_scan: self.get_logger().warning('no usable /scan — require_scan is set, so forward motion is blocked until scans return')
+            else: self.get_logger().warning('no usable /scan — front stop gate is OFF and forward motion is UNPROTECTED (require_scan=false)')
+            self.scan_usable=usable
         # Safety gate: while an obstacle is inside the stop distance, any command
         # with forward velocity is replaced by a full stop. Commands that only
-        # reverse or rotate in place (linear.x <= 0) pass through unchanged.
-        if self.blocked and out.linear.x>0:
-            self.get_logger().warning(
-                f'front stop gate zeroing {source} command lin={out.linear.x:.2f} (nearest {self.nearest:.2f} m)',
-                throttle_duration_sec=1.0)
-            out=Twist()
-        # The gate decides from LiDAR data; warn if that data stops flowing.
-        if self.last_scan_t and now-self.last_scan_t>1.0:
-            self.get_logger().warning(f'/scan stale for {now-self.last_scan_t:.1f} s — front stop gate using old data', throttle_duration_sec=2.0)
+        # reverse or rotate in place (linear.x <= 0) pass through unchanged, so a
+        # robot that has gated itself against a wall can always back out.
+        if out.linear.x>0:
+            if usable and self.blocked:
+                self.get_logger().warning(
+                    f'front stop gate zeroing {source} command lin={out.linear.x:.2f} (nearest {self.nearest:.2f} m)',
+                    throttle_duration_sec=1.0)
+                out=Twist()
+            elif not usable and self.require_scan:
+                self.get_logger().warning(
+                    f'front stop gate zeroing {source} command lin={out.linear.x:.2f}: no usable /scan and require_scan is set',
+                    throttle_duration_sec=1.0)
+                out=Twist()
         # 1 Hz heartbeat while anything nonzero is moving through the mux.
         if abs(out.linear.x)>0.005 or abs(out.angular.z)>0.01:
+            front='no scan' if not usable else f'{self.nearest:.2f} m blocked={self.blocked}'
             self.get_logger().info(
-                f'mux: {source} lin={out.linear.x:+.2f} m/s ang={out.angular.z:+.2f} rad/s '
-                f'front={self.nearest:.2f} m blocked={self.blocked}',
+                f'mux: {source} lin={out.linear.x:+.2f} m/s ang={out.angular.z:+.2f} rad/s front={front}',
                 throttle_duration_sec=1.0)
         self.pub.publish(out)
 

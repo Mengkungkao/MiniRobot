@@ -26,9 +26,9 @@ static uint8_t commandLength = 0;
 // character, not a number, so they are cast to int.
 static void printBuildConfig() {
   Serial.print(F("INFO,CFG,counts="));
-  Serial.print(MEASURED_COUNTS_PER_REV[LEFT], 1);
+  Serial.print(MEASURED_COUNTS_PER_REV[MOTOR_1], 1);
   Serial.print('/');
-  Serial.print(MEASURED_COUNTS_PER_REV[RIGHT], 1);
+  Serial.print(MEASURED_COUNTS_PER_REV[MOTOR_2], 1);
   Serial.print(F(",dia="));
   Serial.print(WHEEL_DIAMETER_MM, 2);
   Serial.print(F(",track="));
@@ -42,13 +42,19 @@ static void printBuildConfig() {
   Serial.print(F(",maxpwm="));
   Serial.print((int)MAX_DRIVE_PWM);
   Serial.print(F(",enc="));
-  Serial.print((int)ENCODER_SIGN[LEFT]);
+  Serial.print((int)ENCODER_SIGN[MOTOR_1]);
   Serial.print('/');
-  Serial.print((int)ENCODER_SIGN[RIGHT]);
+  Serial.print((int)ENCODER_SIGN[MOTOR_2]);
   Serial.print(F(",mot="));
-  Serial.print((int)MOTOR_DIRECTION_SIGN[LEFT]);
+  Serial.print((int)MOTOR_DIRECTION_SIGN[MOTOR_1]);
   Serial.print('/');
-  Serial.println((int)MOTOR_DIRECTION_SIGN[RIGHT]);
+  Serial.print((int)MOTOR_DIRECTION_SIGN[MOTOR_2]);
+  // Which side of the body each motor drives, so a host can check the one
+  // constant that decides whether a turn command turns the right way.
+  Serial.print(F(",ysign="));
+  Serial.print((int)WHEEL_Y_SIGN[MOTOR_1]);
+  Serial.print('/');
+  Serial.println((int)WHEEL_Y_SIGN[MOTOR_2]);
 }
 
 // Parse and execute one complete command line (see the top-of-sketch comment
@@ -76,21 +82,27 @@ static void processCommand(char *line) {
       Serial.println(F("ERR,VEL_FORMAT"));
     }
   }
-  else if (strcmp(command, "FORWARD") == 0) {
+  else if (strcmp(command, "FORWARD") == 0 || strcmp(command, "REVERSE") == 0 ||
+           strcmp(command, "LEFT") == 0 || strcmp(command, "RIGHT") == 0) {
+    // The four bare test aliases, for driving the board by hand from a serial
+    // terminal. FORWARD/REVERSE are linear towards and away from the LiDAR
+    // end; LEFT/RIGHT are in-place rotation, counter-clockwise and clockwise.
+    // They answer ACK/ERR like everything else, so a command swallowed by a
+    // latched e-stop does not look identical to one that worked.
     char *value = strtok_r(NULL, ",", &savePtr);
-    if (!emergencyStopLatched) setVelocityCommand(value ? fabs(atof(value)) : DEFAULT_TEST_LINEAR_MM_S, 0.0f);
-  }
-  else if (strcmp(command, "REVERSE") == 0) {
-    char *value = strtok_r(NULL, ",", &savePtr);
-    if (!emergencyStopLatched) setVelocityCommand(-(value ? fabs(atof(value)) : DEFAULT_TEST_LINEAR_MM_S), 0.0f);
-  }
-  else if (strcmp(command, "LEFT") == 0) {
-    char *value = strtok_r(NULL, ",", &savePtr);
-    if (!emergencyStopLatched) setVelocityCommand(0.0f, value ? fabs(atof(value)) : DEFAULT_TEST_ANGULAR_DEG_S);
-  }
-  else if (strcmp(command, "RIGHT") == 0) {
-    char *value = strtok_r(NULL, ",", &savePtr);
-    if (!emergencyStopLatched) setVelocityCommand(0.0f, -(value ? fabs(atof(value)) : DEFAULT_TEST_ANGULAR_DEG_S));
+    if (emergencyStopLatched) {
+      Serial.println(F("ERR,ESTOP_LATCHED"));
+    } else {
+      const bool linear = (strcmp(command, "FORWARD") == 0 || strcmp(command, "REVERSE") == 0);
+      const bool negative = (strcmp(command, "REVERSE") == 0 || strcmp(command, "RIGHT") == 0);
+      const float magnitude = value ? fabs(atof(value))
+                                    : (linear ? DEFAULT_TEST_LINEAR_MM_S : DEFAULT_TEST_ANGULAR_DEG_S);
+      const float signedValue = negative ? -magnitude : magnitude;
+      if (linear) setVelocityCommand(signedValue, 0.0f);
+      else setVelocityCommand(0.0f, signedValue);
+      Serial.print(F("ACK,"));
+      Serial.println(command);
+    }
   }
   else if (strcmp(command, "STOP") == 0) {
     stopCommand(false);

@@ -171,7 +171,9 @@ class NavMonitor(Node):
                 w = ' '.join(f'{v:+.0f}' for v in wheels_mm)
                 problems.append(
                     f'WHEELS STALLED: commanded lin={cmd_stall.linear.x:+.2f} ang={cmd_stall.angular.z:+.2f} '
-                    f'but wheels [{w}] mm/s — PWM below breakaway (humming); check battery voltage / floor load')
+                    f'but wheels [m1 m2: {w}] mm/s — the base boosts a stalled wheel in bursts and '
+                    f'reports it as stalled_motors in /diagnostics; check for an obstruction, '
+                    f'battery voltage, or floor load')
         # --- direction check: commanded vs measured motion ------------------
         # If the base consistently moves opposite to the command, the reversal
         # is in the command chain (bridge/firmware). If commands and odometry
@@ -190,7 +192,9 @@ class NavMonitor(Node):
                     and cmd.angular.z * meas.angular.z < 0:
                 problems.append(
                     f'REVERSED ANGULAR: commanded {cmd.angular.z:+.2f} rad/s but odom measures '
-                    f'{meas.angular.z:+.2f} rad/s -> rotation sign inverted (MOTOR_DIRECTION_SIGN vs IMU_YAW_SIGN)')
+                    f'{meas.angular.z:+.2f} rad/s -> rotation sign inverted. If the wheels also turn '
+                    f'the wrong way it is WHEEL_Y_SIGN (the two motors recorded on the wrong sides); '
+                    f'if the robot turns correctly but odometry disagrees it is IMU_YAW_SIGN')
 
         # Recovery behaviors executing = the goal is failing; name the motion
         # so reversing/spinning is not mistaken for a sign bug.

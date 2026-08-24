@@ -52,7 +52,9 @@ from typing import Callable, Optional
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKETCH_DIR = REPO_ROOT / "arduino_mini_base_controller"
 
-TELEMETRY_FIELD_COUNT = 22
+# 23 with the status word; firmware from before it emitted 22 and is otherwise
+# identical on the wire.
+TELEMETRY_FIELD_COUNTS = (23, 22)
 DEFAULT_PORT = "/dev/arduino_mini"
 DEFAULT_BAUD = 500000
 
@@ -85,6 +87,14 @@ class SketchConstants:
     max_drive_pwm: int
     encoder_sign: list[int]
     motor_direction_sign: list[int]
+    wheel_y_sign: list[int]
+    pid_kp: float
+    pid_ki: float
+    pid_kd: float
+    max_integral_pwm: float
+    ff_breakaway_pwm: list[float]
+    speed_window_max_ms: float
+    stall_speed_mm_s: float
     ff_slope_fwd: list[float]
     ff_intercept_fwd: list[float]
     ff_slope_rev: list[float]
@@ -124,10 +134,18 @@ def load_sketch_constants(sketch_dir: Path = SKETCH_DIR) -> SketchConstants:
         max_drive_pwm=_scalar(geometry, "MAX_DRIVE_PWM", cast=int),
         encoder_sign=_array(geometry, "ENCODER_SIGN", cast=int),
         motor_direction_sign=_array(geometry, "MOTOR_DIRECTION_SIGN", cast=int),
+        wheel_y_sign=_array(geometry, "WHEEL_Y_SIGN", cast=int),
         ff_slope_fwd=_array(config, "FF_SLOPE_MM_S_PER_PWM_FWD"),
         ff_intercept_fwd=_array(config, "FF_INTERCEPT_MM_S_FWD"),
         ff_slope_rev=_array(config, "FF_SLOPE_MM_S_PER_PWM_REV"),
         ff_intercept_rev=_array(config, "FF_INTERCEPT_MM_S_REV"),
+        pid_kp=_scalar(config, "WHEEL_PID_KP"),
+        pid_ki=_scalar(config, "WHEEL_PID_KI"),
+        pid_kd=_scalar(config, "WHEEL_PID_KD"),
+        max_integral_pwm=_scalar(config, "MAX_INTEGRAL_PWM"),
+        ff_breakaway_pwm=_array(config, "FF_BREAKAWAY_PWM"),
+        speed_window_max_ms=_scalar(config, "SPEED_WINDOW_MAX_MS"),
+        stall_speed_mm_s=_scalar(config, "STALL_SPEED_MM_S"),
     )
 
 
@@ -150,11 +168,12 @@ class Sample:
     wheel_pwm: list[float]
     estop: bool
     watchdog: bool
+    status: int
 
     @classmethod
     def parse(cls, line: str) -> Optional["Sample"]:
         f = line.split(",")
-        if len(f) != TELEMETRY_FIELD_COUNT:
+        if len(f) not in TELEMETRY_FIELD_COUNTS:
             return None
         try:
             return cls(
@@ -166,6 +185,7 @@ class Sample:
                 wheel_mm_s=[float(v) for v in f[9:11]],
                 wheel_pwm=[float(v) for v in f[11:13]],
                 estop=bool(int(f[20])), watchdog=bool(int(f[21])),
+                status=int(f[22]) if len(f) > 22 else 0,
             )
         except ValueError:
             return None
@@ -347,8 +367,8 @@ def ask_wrong_wheels(prompt: str, assume_yes: bool) -> Optional[list[int]]:
     """Ask which wheels physically drove the wrong way.
 
     Returns the wheel indices that went backwards, an empty list if both were
-    right, or None if nobody actually looked -- which is not the same answer and
-    must not be recorded as a pass. Bare Enter means None for the same reason:
+    correct, or None if nobody actually looked -- which is not the same answer
+    and must not be recorded as a pass. Bare Enter means None for the same reason:
     this is the one check telemetry cannot make, so it defaults to "unproven"
     rather than "fine".
     """
@@ -356,17 +376,17 @@ def ask_wrong_wheels(prompt: str, assume_yes: bool) -> Optional[list[int]]:
         print(f"{prompt} [--yes: not observed]")
         return None
     try:
-        answer = input(f"{prompt} [none/left/right/both] ").strip().lower()
+        answer = input(f"{prompt} [none/1/2/both] ").strip().lower()
     except EOFError:
         return None
     if answer in ("none", "n", "neither", "ok"):
         return []
-    if answer.startswith("l"):
-        return [LEFT_INDEX]
-    if answer.startswith("r"):
-        return [RIGHT_INDEX]
+    if answer in ("1", "m1", "motor1", "motor 1"):
+        return [MOTOR_1_INDEX]
+    if answer in ("2", "m2", "motor2", "motor 2"):
+        return [MOTOR_2_INDEX]
     if answer.startswith("b"):
-        return [LEFT_INDEX, RIGHT_INDEX]
+        return [MOTOR_1_INDEX, MOTOR_2_INDEX]
     print("  no answer recorded -- treating the wheel directions as unverified")
     return None
 
@@ -375,11 +395,14 @@ def ask_wrong_wheels(prompt: str, assume_yes: bool) -> Optional[list[int]]:
 # Tests
 # -----------------------------------------------------------------------------
 
-# Motor numbering as the firmware uses it: 1 = LEFT (TB6612 channel A),
-# 2 = RIGHT (channel B). Same order as every per-wheel array in the sketch and
-# every per-wheel pair in the telemetry line.
-LEFT_INDEX, RIGHT_INDEX = 0, 1
-WHEEL = ("LEFT", "RIGHT")
+# Motor numbering as the firmware uses it: 1 = TB6612 channel A, 2 = channel B.
+# Same order as every per-wheel array in the sketch and every per-wheel pair in
+# the telemetry line. A motor number names a channel and never a side of the
+# robot -- WHEEL_Y_SIGN in MiniRobotGeometry.h is the one place that says which
+# side each drives, so this script reports faults by motor number and lets the
+# operator look up the wheel.
+MOTOR_1_INDEX, MOTOR_2_INDEX = 0, 1
+WHEEL = ("motor 1", "motor 2")
 
 
 def check_firmware_matches_source(link: ArduinoLink, k: SketchConstants, r: Result) -> None:
@@ -434,6 +457,8 @@ def check_firmware_matches_source(link: ArduinoLink, k: SketchConstants, r: Resu
             ("enc", pair(fields["enc"]), [float(s) for s in k.encoder_sign], "ENCODER_SIGN"),
             ("mot", pair(fields["mot"]), [float(s) for s in k.motor_direction_sign],
              "MOTOR_DIRECTION_SIGN"),
+            ("ysign", pair(fields["ysign"]), [float(s) for s in k.wheel_y_sign],
+             "WHEEL_Y_SIGN"),
             ("maxlin", [float(fields["maxlin"])], [k.max_linear_mm_s], "MAX_LINEAR_MM_S"),
             ("maxang", [float(fields["maxang"])], [k.max_angular_deg_s], "MAX_ANGULAR_DEG_S"),
             ("maxwheel", [float(fields["maxwheel"])], [k.max_wheel_mm_s], "MAX_WHEEL_MM_S"),
@@ -531,9 +556,9 @@ def test_signs(link: ArduinoLink, k: SketchConstants, args) -> Result:
         backward  negative   motor inverted             MOTOR_DIRECTION_SIGN
         backward  positive   both inverted              both
 
-    Mirror-mounted motors land in row three: identical wiring drives the two
-    sides in opposite directions, and the encoder honestly reports a wheel that
-    is being driven the wrong way.
+    Mirror-mounted motors land in row three unless their leads are mirrored to
+    match: identical wiring drives the two sides in opposite directions, and the
+    encoder honestly reports a wheel that is being driven the wrong way.
     """
     r = Result("signs")
     speed = args.sign_speed
@@ -594,9 +619,9 @@ def test_signs(link: ArduinoLink, k: SketchConstants, args) -> Result:
     # steady-state split between them is a per-wheel calibration problem.
     samples = link.drive(speed, 0.0, seconds=2.5, settle=1.5)
     if samples:
-        left, right = (mean(s.wheel_mm_s[i] for s in samples) for i in (0, 1))
-        split = abs(left - right)
-        r.add(f"straight-line split at {speed:.0f} mm/s: L {left:+.1f}  R {right:+.1f}  "
+        m1, m2 = (mean(s.wheel_mm_s[i] for s in samples) for i in (0, 1))
+        split = abs(m1 - m2)
+        r.add(f"straight-line split at {speed:.0f} mm/s: m1 {m1:+.1f}  m2 {m2:+.1f}  "
               f"delta {split:.1f} mm/s")
         if split > max(10.0, 0.15 * speed):
             r.worst(WARN, f"wheels disagree by {split:.1f} mm/s on a straight command")
@@ -825,7 +850,7 @@ def test_scale(link: ArduinoLink, k: SketchConstants, args) -> Result:
     odom_mm = math.hypot(end.x_mm - start.x_mm, end.y_mm - start.y_mm)
     ticks = [end.ticks[i] - start.ticks[i] for i in range(2)]
     r.add(f"odometry says it travelled {odom_mm:.1f} mm "
-          f"(ticks L {ticks[0]}, R {ticks[1]})")
+          f"(ticks m1 {ticks[0]}, m2 {ticks[1]})")
 
     measured = args.measured_mm if args.measured_mm else ask_float(
         "  measure the ACTUAL distance travelled in mm and enter it: ")
@@ -912,8 +937,9 @@ def test_track(link: ArduinoLink, k: SketchConstants, args) -> Result:
 
     if measured_rate * rate < 0:
         r.worst(FAIL, "robot turns the wrong way")
-        r.fix("Rotation sign is inverted: check IMU_YAW_SIGN in Config.h, and that LEFT/RIGHT "
-              "are not swapped in the wiring.")
+        r.fix("Rotation sign is inverted: check IMU_YAW_SIGN in Config.h, and WHEEL_Y_SIGN "
+              "in MiniRobotGeometry.h -- if the two motors are recorded on the wrong sides "
+              "of the centre line, every turn command turns the other way.")
         return r
     if abs(measured_rate) < 1.0:
         r.worst(FAIL, "robot did not turn")
@@ -954,8 +980,9 @@ class ModelPID:
     """Port of WheelPID (Types.h) at lambda == mu == 1.0, which is the classic
     PID fast path the firmware actually runs by default."""
 
-    def __init__(self, kp: float, ki: float, kd: float) -> None:
+    def __init__(self, kp: float, ki: float, kd: float, max_integral_pwm: float) -> None:
         self.kp, self.ki, self.kd = kp, ki, kd
+        self.max_integral_pwm = max_integral_pwm
         self.integral = 0.0
         self.previous_error = 0.0
         self.previous_target = 0.0
@@ -967,7 +994,7 @@ class ModelPID:
         self.previous_target = target
         error = target - measured
         self.integral += error * dt
-        limit = 80.0 / self.ki if self.ki > 0.0001 else 500.0
+        limit = self.max_integral_pwm / self.ki if self.ki > 0.0001 else 500.0
         self.integral = max(-limit, min(limit, self.integral))
         derivative = (error - self.previous_error) / dt
         self.previous_error = error
@@ -983,22 +1010,45 @@ def simulate(target_mm_s: float, k: SketchConstants, counts_true: float,
     The plant is defined in ticks per second, which is the only thing the
     hardware actually produces -- that keeps the model honest about the
     difference between what the wheel does and what the firmware believes.
+
+    What is modelled: the acceleration ramp, the windowed encoder speed
+    estimate, the low-pass, the feed-forward inversion, the breakaway floor and
+    the PID with its anti-windup. What is not: load. The stall boost only fires
+    against a wheel something is holding, and nothing here holds one, so a run
+    that stalls in the model has a control-law fault rather than a torque
+    problem.
     """
-    # Calibration_results.md, motor 1 forward, recorded while the sketch
-    # assumed 720 counts/rev: mm/s = 4.4057*pwm - 23.82.
+    # arduino_mini_motor_calibration/cal_result.md, motor 1 forward:
+    # mm/s = 6.4639*pwm - 44.31 over PWM 10..72, with a measured hard stall up
+    # to PWM 8 and first motion at 10 on the ascending pass. The stall matters:
+    # without it the model says a wheel creeps at PWM 8, which no measurement
+    # supports and which would hide exactly the dead-zone behaviour
+    # FF_BREAKAWAY_PWM exists for.
+    #
+    # Expressed in ticks/s through the counts/rev the sweep was actually
+    # recorded at, so the model does not inherit the assumption under test.
+    sweep_counts_per_rev = 520.0
+    first_moving_pwm = 10.0
+
     def ticks_per_second(pwm: float) -> float:
-        mm_s_720 = 4.4057 * pwm - 23.82
-        return max(0.0, mm_s_720) / (math.pi * k.wheel_diameter_mm / 720.0)
+        if pwm < first_moving_pwm:
+            return 0.0
+        mm_s = 6.4639 * pwm - 44.31
+        return max(0.0, mm_s) / (math.pi * k.wheel_diameter_mm / sweep_counts_per_rev)
 
     dt = 0.01
     mm_per_count_cfg = math.pi * k.wheel_diameter_mm / k.counts_per_rev[0]
     mm_per_count_true = math.pi * k.wheel_diameter_mm / counts_true
 
-    pid = ModelPID(0.30, 0.020, 0.0030)
+    pid = ModelPID(k.pid_kp, k.pid_ki, k.pid_kd, k.max_integral_pwm)
     ramped = 0.0
     filtered = 0.0
     tps = 0.0
     pwm = 0.0
+    # The open measurement window: ticks and seconds since the speed estimate
+    # was last recomputed (updateWheelSpeed in MotorControl.cpp).
+    window_ticks = 0.0
+    window_seconds = 0.0
 
     for _ in range(int(seconds / dt)):
         ramped = min(ramped + 150.0 * dt, target_mm_s)   # LINEAR_ACCEL_MM_S2
@@ -1007,23 +1057,38 @@ def simulate(target_mm_s: float, k: SketchConstants, counts_true: float,
         tps += (ticks_per_second(pwm) - tps) * min(1.0, dt / 0.08)
         ticks = tps * dt
 
-        raw = (ticks * mm_per_count_cfg / dt) * encoder_sign
-        filtered += 0.35 * (raw - filtered)
+        # The firmware counts whole ticks, and at low speed that quantisation
+        # is the whole problem the window exists to solve.
+        window_ticks += ticks * encoder_sign
+        window_seconds += dt
+        if abs(window_ticks) >= 1.0 or window_seconds >= k.speed_window_max_ms / 1000.0:
+            raw = (window_ticks * mm_per_count_cfg) / window_seconds
+            filtered += 0.35 * (raw - filtered)          # WHEEL_SPEED_FILTER_ALPHA
+            window_ticks = 0.0
+            window_seconds = 0.0
 
         slope, intercept = k.ff_slope_fwd[0], k.ff_intercept_fwd[0]
         feed_forward = 0.0
         if ramped >= 1.0 and slope > 0.0:
             feed_forward = max(0.0, min(float(k.max_drive_pwm),
                                         (ramped - intercept) / slope))
-        pwm = max(0.0, min(pwm_ceiling, feed_forward + pid.update(ramped, filtered, dt)))
+        pwm = feed_forward + pid.update(ramped, filtered, dt)
+        # Breakaway floor: a commanded wheel that is not turning gets at least
+        # enough duty to move (MotorControl.cpp).
+        if ramped >= 1.0 and abs(filtered) < k.stall_speed_mm_s:
+            pwm = max(pwm, k.ff_breakaway_pwm[0])
+        pwm = max(0.0, min(pwm_ceiling, pwm))
 
     return tps * mm_per_count_true, filtered, pwm
 
 
 def run_selftest(k: SketchConstants) -> int:
     print("Offline model of the firmware control law -- no hardware involved.")
-    print("Plant: motor 1 forward from Calibration_results.md, re-expressed in encoder")
-    print("ticks/s so it does not inherit the counts/rev assumption under test.\n")
+    print("Plant: motor 1 forward from arduino_mini_motor_calibration/cal_result.md,")
+    print("re-expressed in encoder ticks/s so it does not inherit the counts/rev")
+    print("assumption under test. Load is not modelled, so the stall boost never fires.\n")
+    print(f"Gains read from Config.h: Kp {k.pid_kp}, Ki {k.pid_ki}, Kd {k.pid_kd}, "
+          f"integral cap {k.max_integral_pwm:.0f} PWM\n")
     print(f"Config.h now: MEASURED_COUNTS_PER_REV = {k.counts_per_rev[0]:.0f}, "
           f"FF slope {k.ff_slope_fwd[0]:.4f}, intercept {k.ff_intercept_fwd[0]:+.2f}, "
           f"MAX_LINEAR_MM_S = {k.max_linear_mm_s:.0f}\n")

@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 
-// Print "<n>(LEFT)" / "<n>(RIGHT)" for operator-facing messages.
+// Print "1(CH_A)" / "2(CH_B)" for operator-facing messages.
 void printMotorLabel(uint8_t index);
 
 // True if the operator sent anything -- used as an abort request during the

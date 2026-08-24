@@ -121,26 +121,72 @@ static void readBytes(uint8_t address, uint8_t subAddress, uint8_t count, uint8_
   while (i < count) dest[i++] = 0;
 }
 
-// WHO_AM_I distinguishes the three supported parts: 0x70 MPU6500 (no
-// magnetometer), 0x71 MPU9250, 0x73 MPU9255. The module may sit at either I2C
-// address depending on how its AD0 pin is strapped.
-static void detectMPU() {
-  const uint8_t id1 = readByte(MPU_ADDR_1, REG_WHO_AM_I);
-  delay(10);
-  const uint8_t id2 = readByte(MPU_ADDR_2, REG_WHO_AM_I);
-  delay(10);
+// Whatever WHO_AM_I returned at each candidate address on the last detection
+// attempt, kept so a failed detection can say what it actually saw.
+static uint8_t lastWhoAmI[2] = {0xFF, 0xFF};
 
-  if (id1 == 0x70 || id1 == 0x71 || id1 == 0x73) {
-    mpuAddress = MPU_ADDR_1;
-    mpuWhoAmI = id1;
-    mpuFound = true;
-  } else if (id2 == 0x70 || id2 == 0x71 || id2 == 0x73) {
-    mpuAddress = MPU_ADDR_2;
-    mpuWhoAmI = id2;
-    mpuFound = true;
-  } else {
-    mpuFound = false;
+static bool isSupportedWhoAmI(uint8_t id) {
+  // 0x70 MPU6500 (no magnetometer), 0x71 MPU9250, 0x73 MPU9255.
+  return id == 0x70 || id == 0x71 || id == 0x73;
+}
+
+// The module may sit at either I2C address depending on how its AD0 pin is
+// strapped, so both are probed.
+//
+// Detection runs twice: once at 400 kHz, and if nothing answers, again at
+// 100 kHz. Fast mode is fine on a short, clean bus and is what this robot
+// normally runs, but long jumper leads or missing pull-ups degrade the edges
+// enough that the fast clock fails while the standard one works. A robot that
+// falls back to encoder-only heading because of cable capacitance is worth two
+// hundred milliseconds at boot.
+static void detectMPU() {
+  for (uint8_t attempt = 0; attempt < 2; ++attempt) {
+    Wire.setClock(attempt == 0 ? 400000UL : 100000UL);
+
+    lastWhoAmI[0] = readByte(MPU_ADDR_1, REG_WHO_AM_I);
+    delay(10);
+    lastWhoAmI[1] = readByte(MPU_ADDR_2, REG_WHO_AM_I);
+    delay(10);
+
+    for (uint8_t i = 0; i < 2; ++i) {
+      if (isSupportedWhoAmI(lastWhoAmI[i])) {
+        mpuAddress = (i == 0) ? MPU_ADDR_1 : MPU_ADDR_2;
+        mpuWhoAmI = lastWhoAmI[i];
+        mpuFound = true;
+        if (attempt != 0) Serial.println(F("INFO,IMU_I2C_FELL_BACK_TO_100KHZ"));
+        return;
+      }
+    }
   }
+  mpuFound = false;
+}
+
+// Walk the bus and print every address that acknowledges.
+//
+// "NONE" is the same word for three different faults: nothing on the bus at
+// all (power, SDA/SCL swapped, no pull-ups), a module that answers but is a
+// part this driver does not know, and a module on an address nobody probed.
+// They need three different fixes, and the only way to tell them apart is to
+// look. Printed only when detection has already failed, so it costs nothing on
+// a healthy robot.
+static void printI2CScan() {
+  Serial.print(F("INFO,I2C_SCAN"));
+  uint8_t found = 0;
+  for (uint8_t address = 0x08; address < 0x78; ++address) {
+    Wire.beginTransmission(address);
+    if (Wire.endTransmission() == 0) {
+      Serial.print(F(",0x"));
+      Serial.print(address, HEX);
+      ++found;
+    }
+  }
+  if (found == 0) Serial.print(F(",EMPTY_BUS"));
+  Serial.println();
+
+  Serial.print(F("INFO,WHO_AM_I,0x68=0x"));
+  Serial.print(lastWhoAmI[0], HEX);
+  Serial.print(F(",0x69=0x"));
+  Serial.println(lastWhoAmI[1], HEX);
 }
 
 static void initMPU() {
@@ -466,6 +512,7 @@ void printImuInfo() {
   Serial.print(F("INFO,IMU,"));
   if (!mpuFound) {
     Serial.println(F("NONE"));
+    printI2CScan();
     return;
   }
   switch (mpuWhoAmI) {
@@ -484,8 +531,9 @@ void printImuInfo() {
 
 bool imuBegin() {
   Wire.begin();
-  Wire.setClock(400000UL);
-
+  // detectMPU() picks the bus clock: 400 kHz if the module answers there,
+  // 100 kHz if it only answers slower. Setting it here as well would just be
+  // overwritten.
   detectMPU();
   if (mpuFound) {
     initMPU();

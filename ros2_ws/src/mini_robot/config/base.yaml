@@ -2,6 +2,9 @@ mini_serial_bridge:
   ros__parameters:
     port: /dev/arduino_mini
     baud: 500000
+    # Normally the mux's output. With the mux switched off
+    # (robot.launch.py mux:=false) the launch file points this straight at
+    # /cmd_vel instead, so teleop and Nav2 still reach the base.
     cmd_vel_topic: /cmd_vel_out
     odom_topic: /odom
     imu_topic: /imu/data
@@ -15,20 +18,33 @@ mini_serial_bridge:
     max_linear_m_s: 0.15
     max_angular_rad_s: 1.5
     wheel_diameter_m: 0.047
-    # Must match MEASURED_COUNTS_PER_REV in arduino_mini_base_controller.ino.
-    # Only affects the wheel angles in /joint_states (RViz animation), not
-    # odometry, which the Arduino integrates itself.
+    # Must match MEASURED_COUNTS_PER_REV in the sketch. Only affects the wheel
+    # angles in /joint_states (RViz animation), not odometry, which the Arduino
+    # integrates itself.
     counts_per_rev: 520.0
-    # The LiDAR faces the caster end, so that end is the robot's front while
-    # the Arduino still calls the drive-axle end forward. True rotates every
-    # x/y quantity crossing the serial link by 180 deg, so a positive
-    # cmd_vel linear.x drives towards the LiDAR. Change this together with
-    # caster_x / imu_joint in mini_robot.urdf.xacro and the costmap footprint
-    # in nav2_params.yaml -- they describe the same physical decision.
-    reverse_base_direction: true
+    # Which URDF joint each motor drives, in motor order: motor 1 (TB6612
+    # channel A) first, motor 2 (channel B) second. Motor numbers name a
+    # channel, never a side; this line is where a number becomes a side, and it
+    # is the mirror of WHEEL_Y_SIGN in the firmware's MiniRobotGeometry.h --
+    # motor 1 at -y is the starboard wheel, motor 2 at +y the port one, both
+    # measured on blocks by spinning one wheel at a time. Change the two
+    # together. Nothing but /joint_states depends on it.
+    wheel_joint_names: [right_wheel_joint, left_wheel_joint]
 
 mini_cmd_mux:
   ros__parameters:
     front_stop_distance: 0.30
     front_half_angle_deg: 45.0
     source_timeout: 0.40
+    # What to do when /scan is not there at all. The gate is a safety feature
+    # that needs a sensor: with the LiDAR unplugged or its node switched off,
+    # false lets the robot still be driven (teleop, manual, dead reckoning)
+    # with no obstacle protection, while true refuses to pass any forward
+    # command until scans appear. false is the default because "the robot does
+    # not move and nothing says why" is the worse failure for a small robot on
+    # a bench.
+    require_scan: false
+    # How long a scan stays usable. Past this the gate treats the data as
+    # missing and falls back to require_scan above, rather than steering off a
+    # snapshot of a room the robot has since driven through.
+    scan_timeout: 1.0

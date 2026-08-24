@@ -61,8 +61,8 @@ static void printConstantLine(const __FlashStringHelper *name, uint8_t dirSlot, 
 }
 
 static void reportSlopeMismatch(uint8_t dirSlot, const __FlashStringHelper *label) {
-  const float a = results[LEFT][dirSlot].slope;
-  const float b = results[RIGHT][dirSlot].slope;
+  const float a = results[MOTOR_1][dirSlot].slope;
+  const float b = results[MOTOR_2][dirSlot].slope;
   const float larger = max(a, b);
   if (larger <= 0.0f) return;
 

@@ -41,7 +41,7 @@ struct TB6612Channel {
   }
 };
 
-// The two wheels, indexed by LEFT / RIGHT.
+// The two wheels, indexed by MOTOR_1 / MOTOR_2.
 extern const TB6612Channel motor[MOTOR_COUNT];
 
 // Configure both channels as outputs, take the driver out of standby and set

@@ -8,8 +8,11 @@
 #include "Direction.h"
 
 void printMotorLabel(uint8_t index) {
+  // Motor 1 is TB6612 channel A and motor 2 is channel B; neither is named
+  // after a side of the robot. Which side each drives is WHEEL_Y_SIGN's job
+  // (MiniRobotGeometry.h) and does not belong in a bench sketch's prompts.
   Serial.print(index + 1);
-  Serial.print(index == LEFT ? F("(LEFT)") : F("(RIGHT)"));
+  Serial.print(index == MOTOR_1 ? F("(CH_A)") : F("(CH_B)"));
 }
 
 bool abortRequested() {

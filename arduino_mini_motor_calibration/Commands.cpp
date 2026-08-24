@@ -25,9 +25,9 @@ void printConfig() {
   // a few hundred bytes of a sketch that is half empty and turns a silent
   // wrong answer into a visible one.
   Serial.print(F("INFO,GEOMETRY,counts="));
-  Serial.print(countsPerRev[LEFT], 1);
+  Serial.print(countsPerRev[MOTOR_1], 1);
   Serial.print('/');
-  Serial.print(countsPerRev[RIGHT], 1);
+  Serial.print(countsPerRev[MOTOR_2], 1);
   Serial.print(F(",dia="));
   Serial.print(WHEEL_DIAMETER_MM, 2);
   Serial.print(F(",maxpwm="));

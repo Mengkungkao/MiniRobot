@@ -79,7 +79,7 @@ void printGeometryPasteBlock() {
 // Returns false if they aborted or ran out of time.
 static bool spinAndCount(uint8_t index, uint8_t turns,
                          int32_t &measured, int32_t &crosstalk) {
-  const uint8_t otherIndex = (index == LEFT) ? RIGHT : LEFT;
+  const uint8_t otherIndex = (index == MOTOR_1) ? MOTOR_2 : MOTOR_1;
 
   motorsCoastAll();
   for (uint8_t i = 0; i < MOTOR_COUNT; ++i) readEncoderAndResetAtomic(i);
@@ -120,9 +120,9 @@ static bool spinAndCount(uint8_t index, uint8_t turns,
     if (millis() - lastPrint >= 250) {
       lastPrint = millis();
       Serial.print(F("CPR,LIVE,"));
-      Serial.print(total[LEFT]);
+      Serial.print(total[MOTOR_1]);
       Serial.print(',');
-      Serial.println(total[RIGHT]);
+      Serial.println(total[MOTOR_2]);
     }
     delay(5);
   }
@@ -199,10 +199,10 @@ void measureCountsPerRev(int8_t onlyIndex, uint8_t turns) {
   // the firmware trusts each wheel's own number: an undercounting encoder makes
   // that wheel report slow, which makes PID drive it physically fast.
   if (allOk && onlyIndex < 0) {
-    const float larger = max(countsPerRev[LEFT], countsPerRev[RIGHT]);
+    const float larger = max(countsPerRev[MOTOR_1], countsPerRev[MOTOR_2]);
     if (larger > 0.0f) {
       const float diffPct =
-        100.0f * fabs(countsPerRev[LEFT] - countsPerRev[RIGHT]) / larger;
+        100.0f * fabs(countsPerRev[MOTOR_1] - countsPerRev[MOTOR_2]) / larger;
       Serial.print(F("INFO,CPR_MISMATCH,"));
       Serial.print(diffPct, 1);
       Serial.println('%');

@@ -28,15 +28,27 @@ except ImportError as exc:  # pragma: no cover - runtime dependency check
 STANDARD_GRAVITY = 9.80665
 
 # T + 6 base fields + 2 ticks + 2 wheel speeds + 2 PWM + roll + pitch
-# + 2 gyro + 3 accel + 2 flags
-TELEMETRY_FIELD_COUNT = 22
+# + 2 gyro + 3 accel + 2 flags (+ 1 status word, added later)
+TELEMETRY_FIELD_COUNT = 23
+# Firmware from before the status word emitted 22 fields and is otherwise
+# identical on the wire, so it is still accepted and simply reports no status.
+TELEMETRY_FIELD_COUNT_LEGACY = 22
+
+# Bits of the telemetry status word. See statusBits() in Telemetry.cpp.
+STATUS_MOTOR_STALLED = (0x01, 0x02)   # indexed by motor number - 1
+STATUS_IMU_PRESENT = 0x04
+STATUS_MAG_FUSION = 0x08
 
 
 @dataclass
 class Telemetry:
     """One decoded 'T,...' telemetry line from the Arduino: pose/velocity in
-    Arduino units (mm, degrees), per-wheel encoder/speed/PWM values, the fused
-    IMU attitude and raw rates, and the e-stop / watchdog status flags."""
+    Arduino units (mm, degrees), per-motor encoder/speed/PWM values, the fused
+    IMU attitude and raw rates, the e-stop / watchdog flags and the status word.
+
+    Per-motor lists are indexed by motor number - 1: index 0 is motor 1 (TB6612
+    channel A), index 1 is motor 2 (channel B). Which side of the robot each one
+    drives is not part of that numbering -- see wheel_joint_names."""
     arduino_ms: int
     x_mm: float
     y_mm: float
@@ -55,6 +67,7 @@ class Telemetry:
     az_g: float
     estop: bool
     watchdog: bool
+    status: int
 
 
 def rpy_to_quaternion(roll_rad: float, pitch_rad: float, yaw_rad: float) -> Quaternion:
@@ -125,18 +138,14 @@ class SerialBridge(Node):
         # wrong rate in RViz while the robot still drives correctly.
         self.declare_parameter('counts_per_rev', 520.0)
         self.declare_parameter('serial_stale_s', 0.5)
-        # The LiDAR faces the caster end of the chassis, so that end is the
-        # robot's front and base_footprint +x points at it. The Arduino still
-        # calls the drive-axle end "forward", so this bridge is where the two
-        # conventions meet. True applies the 180 deg yaw rotation between them
-        # (ROS base frame = Arduino frame rotated pi about z) to everything
-        # crossing the link: velocity commands out, odometry and wheel states
-        # in. Rotation about z is invariant under that rotation, so angular
-        # velocity and yaw are never touched - only the x/y quantities flip.
-        # Set False only if the LiDAR is remounted facing the axle end; the
-        # matching geometry lives in caster_x / imu_joint
-        # (mini_robot.urdf.xacro) and the costmap footprint (nav2_params.yaml).
-        self.declare_parameter('reverse_base_direction', True)
+        # URDF joint driven by each motor, in motor order: entry 0 is motor 1
+        # (TB6612 channel A), entry 1 is motor 2 (channel B). This is the only
+        # place on the Pi that knows which side of the robot a motor number
+        # sits on, and it is the mirror of WHEEL_Y_SIGN in the firmware's
+        # MiniRobotGeometry.h -- change them together or RViz will animate the
+        # wrong wheel. It affects nothing but /joint_states.
+        self.declare_parameter('wheel_joint_names',
+                               ['right_wheel_joint', 'left_wheel_joint'])
 
         self.port = str(self.get_parameter('port').value)
         self.baud = int(self.get_parameter('baud').value)
@@ -150,9 +159,7 @@ class SerialBridge(Node):
         self.counts_per_rev = float(self.get_parameter('counts_per_rev').value)
         self.serial_stale_s = float(self.get_parameter('serial_stale_s').value)
         self.reconnect_period_s = float(self.get_parameter('reconnect_period_s').value)
-        self.reverse_base = bool(self.get_parameter('reverse_base_direction').value)
-        # Sign applied to every x/y quantity crossing the Arduino boundary.
-        self.base_sign = -1.0 if self.reverse_base else 1.0
+        self.wheel_joint_names = [str(n) for n in self.get_parameter('wheel_joint_names').value]
 
         cmd_topic = str(self.get_parameter('cmd_vel_topic').value)
         odom_topic = str(self.get_parameter('odom_topic').value)
@@ -194,6 +201,9 @@ class SerialBridge(Node):
         self.estop_requested = False
         self.watchdog_reported = True
         self.last_wheel_speed_mm_s = [0.0, 0.0]
+        # Latest telemetry status word, and the one before it, so transitions
+        # are logged once instead of at 20 Hz.
+        self.last_status = 0
         # Latest 'INFO,IMU,...' line, so /diagnostics can report which chip was
         # detected and whether magnetometer fusion is on.
         self.imu_info = 'unknown'
@@ -209,12 +219,10 @@ class SerialBridge(Node):
             f'mini serial bridge ready: {self.port} @ {self.baud} baud, '
             f'cmd_vel={cmd_topic}, odom={odom_topic}'
         )
-        if self.reverse_base:
-            self.get_logger().info(
-                'base direction REVERSED: the caster/LiDAR end is the front. '
-                'A positive cmd_vel linear.x is sent to the Arduino as a '
-                'negative VEL, and odometry x/y and the wheel pair are flipped '
-                'back on the way in.')
+        self.get_logger().info(
+            'base frame: +x is the LiDAR end, shared with the Arduino -- '
+            'velocity commands, odometry and yaw all cross the link unrotated. '
+            f'joints, in motor order: {self.wheel_joint_names}')
 
     def connect_serial(self) -> bool:
         # Open the Arduino port if it is not already open. Reconnect attempts
@@ -292,11 +300,9 @@ class SerialBridge(Node):
             if self.last_cmd.linear.x or self.last_cmd.angular.z:
                 self.get_logger().warning('velocity command suppressed: e-stop is latched', throttle_duration_sec=2.0)
             return
-        # Convert ROS units (m/s, rad/s) to Arduino units (mm/s, deg/s), and
-        # rotate out of the ROS base frame into the Arduino's. Only linear x
-        # changes sign: a 180 deg yaw rotation leaves rotation about z alone,
-        # so "turn left" is still turn left whichever end leads.
-        linear_mm_s = self.last_cmd.linear.x * 1000.0 * self.base_sign
+        # Units only: the Arduino shares this node's base frame, so nothing is
+        # rotated or negated on the way out. m/s -> mm/s, rad/s -> deg/s.
+        linear_mm_s = self.last_cmd.linear.x * 1000.0
         angular_deg_s = math.degrees(self.last_cmd.angular.z)
         self.send_line(f'VEL,{linear_mm_s:.2f},{angular_deg_s:.2f}')
         # Driving heartbeat: commanded vs measured, so a command that reaches
@@ -304,7 +310,8 @@ class SerialBridge(Node):
         if abs(linear_mm_s) > 5.0 or abs(angular_deg_s) > 2.0:
             wheels = ' '.join(f'{v:+.0f}' for v in self.last_wheel_speed_mm_s)
             self.get_logger().info(
-                f'VEL sent: {linear_mm_s:+.0f} mm/s {angular_deg_s:+.0f} deg/s | wheels mm/s [L R: {wheels}]',
+                f'VEL sent: {linear_mm_s:+.0f} mm/s {angular_deg_s:+.0f} deg/s '
+                f'| measured mm/s [m1 m2: {wheels}]',
                 throttle_duration_sec=1.0)
 
     def serial_read_timer(self) -> None:
@@ -354,9 +361,11 @@ class SerialBridge(Node):
                         self.get_logger().warning('Arduino watchdog stopped the motors (VEL command stream interrupted)')
                     else:
                         self.get_logger().info('Arduino watchdog released — motors accepting commands')
+                self.report_status_edges(telemetry.status)
                 self.estop_latched_reported = telemetry.estop
                 self.watchdog_reported = telemetry.watchdog
                 self.last_wheel_speed_mm_s = telemetry.wheel_speed_mm_s
+                self.last_status = telemetry.status
                 self.publish_telemetry(telemetry)
             return
 
@@ -368,11 +377,32 @@ class SerialBridge(Node):
         elif line.startswith(('ACK,', 'PONG', 'C,')):
             self.get_logger().debug(f'Arduino: {line}')
 
+    def report_status_edges(self, status: int) -> None:
+        # Log the status word's transitions. A stalled wheel is the one failure
+        # that looks exactly like success from the ROS side: commands are
+        # accepted, telemetry flows, odometry barely moves. Say it out loud.
+        changed = status ^ self.last_status
+        if not changed:
+            return
+        for index, bit in enumerate(STATUS_MOTOR_STALLED):
+            if changed & bit:
+                if status & bit:
+                    self.get_logger().warning(
+                        f'motor {index + 1} STALLED: commanded to move and not moving. '
+                        'The base is boosting it in bursts; check for an obstruction, '
+                        'a jammed gearbox or a flat battery.')
+                else:
+                    self.get_logger().info(f'motor {index + 1} turning again')
+        if changed & STATUS_IMU_PRESENT and not (status & STATUS_IMU_PRESENT):
+            self.get_logger().warning(
+                'base reports NO IMU: heading is being integrated from the wheels '
+                'alone and will drift on any surface where a wheel can slip.')
+
     def parse_telemetry(self, line: str) -> Optional[Telemetry]:
         # Decode a comma-separated telemetry line into a Telemetry record;
         # returns None (with a warning) on any malformed field.
         fields = line.split(',')
-        if len(fields) != TELEMETRY_FIELD_COUNT:
+        if len(fields) not in (TELEMETRY_FIELD_COUNT, TELEMETRY_FIELD_COUNT_LEGACY):
             self.get_logger().warning(
                 f'Invalid telemetry field count {len(fields)} '
                 f'(expected {TELEMETRY_FIELD_COUNT}): {line[:140]}')
@@ -397,6 +427,9 @@ class SerialBridge(Node):
                 az_g=float(fields[19]),
                 estop=bool(int(fields[20])),
                 watchdog=bool(int(fields[21])),
+                # Absent on pre-status firmware, which then reports nothing
+                # rather than a wrong something.
+                status=int(fields[22]) if len(fields) > 22 else 0,
             )
         except ValueError as exc:
             self.get_logger().warning(f'Cannot parse telemetry: {exc}: {line[:140]}')
@@ -416,23 +449,29 @@ class SerialBridge(Node):
         odom.header.stamp = stamp
         odom.header.frame_id = self.odom_frame
         odom.child_frame_id = self.base_frame
-        # base_sign rotates the Arduino's pose into the ROS base frame. The
-        # odom frame is taken to be rotated by the same pi about its origin,
-        # which is why the position flips but the yaw does not: the robot
-        # still starts at yaw 0 and turning left still increases it.
-        odom.pose.pose.position.x = self.base_sign * data.x_mm / 1000.0
-        odom.pose.pose.position.y = self.base_sign * data.y_mm / 1000.0
+        # Straight unit conversion: the Arduino integrates this pose in the
+        # same frame this node publishes it in.
+        odom.pose.pose.position.x = data.x_mm / 1000.0
+        odom.pose.pose.position.y = data.y_mm / 1000.0
         odom.pose.pose.position.z = 0.0
         odom.pose.pose.orientation = planar_q
-        odom.twist.twist.linear.x = self.base_sign * data.vx_mm_s / 1000.0
+        odom.twist.twist.linear.x = data.vx_mm_s / 1000.0
         odom.twist.twist.angular.z = math.radians(data.wz_deg_s)
+        # Yaw is trusted differently depending on where it came from. A gyro's
+        # heading drifts slowly and smoothly; a heading integrated from the
+        # difference between two wheel distances gains error every time a wheel
+        # slips, and slam_toolbox's scan matcher should be given room to
+        # override it rather than fighting an over-confident prior.
+        with_imu = bool(data.status & STATUS_IMU_PRESENT)
+        yaw_pose_var = 0.03 if with_imu else 0.15
+        yaw_twist_var = 0.05 if with_imu else 0.25
         odom.pose.covariance = [
             0.02, 0.0, 0.0, 0.0, 0.0, 0.0,
             0.0, 0.02, 0.0, 0.0, 0.0, 0.0,
             0.0, 0.0, 9999.0, 0.0, 0.0, 0.0,
             0.0, 0.0, 0.0, 9999.0, 0.0, 0.0,
             0.0, 0.0, 0.0, 0.0, 9999.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.03,
+            0.0, 0.0, 0.0, 0.0, 0.0, yaw_pose_var,
         ]
         odom.twist.covariance = [
             0.03, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -440,7 +479,7 @@ class SerialBridge(Node):
             0.0, 0.0, 9999.0, 0.0, 0.0, 0.0,
             0.0, 0.0, 0.0, 9999.0, 0.0, 0.0,
             0.0, 0.0, 0.0, 0.0, 9999.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.05,
+            0.0, 0.0, 0.0, 0.0, 0.0, yaw_twist_var,
         ]
         self.odom_pub.publish(odom)
 
@@ -476,30 +515,41 @@ class SerialBridge(Node):
         imu.linear_acceleration.x = data.ax_g * STANDARD_GRAVITY
         imu.linear_acceleration.y = data.ay_g * STANDARD_GRAVITY
         imu.linear_acceleration.z = data.az_g * STANDARD_GRAVITY
-        imu.orientation_covariance = [0.02, 0.0, 0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.05]
-        imu.angular_velocity_covariance = [0.02, 0.0, 0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.05]
-        imu.linear_acceleration_covariance = [0.1, 0.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0, 0.1]
+        if data.status & STATUS_IMU_PRESENT:
+            imu.orientation_covariance = [0.02, 0.0, 0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.05]
+            imu.angular_velocity_covariance = [0.02, 0.0, 0.0, 0.0, 0.02, 0.0, 0.0, 0.0, 0.05]
+            imu.linear_acceleration_covariance = [0.1, 0.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0, 0.1]
+        else:
+            # No IMU is fitted, so every field in this message is a zero the
+            # base invented -- and a zeroed Imu message reads as "perfectly
+            # level, perfectly still", which is a lie an EKF would happily
+            # fuse. A leading -1 in the covariance is how sensor_msgs/Imu says
+            # "no estimate for this quantity"; the topic keeps publishing so
+            # the graph and the rate checks stay stable, but nothing that reads
+            # the spec will trust it.
+            #
+            # Yaw is the exception in spirit but not here: the heading the
+            # robot actually navigates on comes from the wheels and is
+            # published on /odom, which carries its own covariance.
+            unavailable = [-1.0] + [0.0] * 8
+            imu.orientation_covariance = unavailable
+            imu.angular_velocity_covariance = unavailable
+            imu.linear_acceleration_covariance = unavailable
         self.imu_pub.publish(imu)
 
         # Joint states for the two wheels: encoder ticks -> wheel angle (rad),
-        # rim speed (mm/s) -> angular velocity (rad/s).
+        # rim speed (mm/s) -> angular velocity (rad/s). Both URDF wheel joints
+        # spin about +y, and the Arduino already reports forward motion as
+        # positive on both wheels, so the values pass through unchanged; only
+        # the naming maps motor number to side (wheel_joint_names).
         joint = JointState()
         joint.header.stamp = stamp
-        # URDF naming: left_wheel_joint is the wheel on the base frame's +y
-        # side. Arduino numbering is 1 LEFT, 2 RIGHT in ITS frame, so with the
-        # base reversed the wheel on ROS-left is Arduino motor 2, and its joint
-        # axis points the opposite way - hence swap the pair and negate both.
-        joint.name = ['left_wheel_joint', 'right_wheel_joint']
-        ticks = data.ticks
-        wheel_speed_mm_s = data.wheel_speed_mm_s
-        if self.reverse_base:
-            ticks = [-ticks[1], -ticks[0]]
-            wheel_speed_mm_s = [-wheel_speed_mm_s[1], -wheel_speed_mm_s[0]]
+        joint.name = list(self.wheel_joint_names)
         radians_per_tick = 2.0 * math.pi / self.counts_per_rev
-        joint.position = [tick * radians_per_tick for tick in ticks]
+        joint.position = [tick * radians_per_tick for tick in data.ticks]
         joint.velocity = [
             (speed_mm_s / 1000.0) / self.wheel_radius
-            for speed_mm_s in wheel_speed_mm_s
+            for speed_mm_s in data.wheel_speed_mm_s
         ]
         self.joint_pub.publish(joint)
 
@@ -514,6 +564,8 @@ class SerialBridge(Node):
 
         connected = self.serial_port is not None and self.serial_port.is_open
         age = time.monotonic() - self.last_telemetry_monotonic if self.last_telemetry_monotonic else math.inf
+        stalled_motors = [str(i + 1) for i, bit in enumerate(STATUS_MOTOR_STALLED)
+                          if self.last_status & bit]
 
         if not connected:
             status.level = DiagnosticStatus.ERROR
@@ -527,6 +579,9 @@ class SerialBridge(Node):
         elif self.watchdog_reported:
             status.level = DiagnosticStatus.WARN
             status.message = 'Arduino command watchdog stopped the motors'
+        elif stalled_motors:
+            status.level = DiagnosticStatus.WARN
+            status.message = f'Motor {" and ".join(stalled_motors)} stalled (commanded but not turning)'
         else:
             status.level = DiagnosticStatus.OK
             status.message = 'Base controller operational'
@@ -538,6 +593,9 @@ class SerialBridge(Node):
             KeyValue(key='estop_latched', value=str(self.estop_latched_reported)),
             KeyValue(key='watchdog_stopped', value=str(self.watchdog_reported)),
             KeyValue(key='imu', value=self.imu_info),
+            KeyValue(key='heading_source',
+                     value='imu' if self.last_status & STATUS_IMU_PRESENT else 'encoders'),
+            KeyValue(key='stalled_motors', value=','.join(stalled_motors) or 'none'),
             KeyValue(key='last_rx', value=self.last_rx_text[:120]),
         ]
         msg.status.append(status)

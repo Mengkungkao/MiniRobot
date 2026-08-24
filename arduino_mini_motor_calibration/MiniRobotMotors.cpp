@@ -1,8 +1,8 @@
 #include "MiniRobotMotors.h"
 
 const TB6612Channel motor[MOTOR_COUNT] = {
-  {PIN_PWMA, PIN_AIN1, PIN_AIN2},   // LEFT
-  {PIN_PWMB, PIN_BIN1, PIN_BIN2},   // RIGHT
+  {PIN_PWMA, PIN_AIN1, PIN_AIN2},   // motor 1, channel A
+  {PIN_PWMB, PIN_BIN1, PIN_BIN2},   // motor 2, channel B
 };
 
 // Raise Timer1 (pins 9 and 10, i.e. both TB6612 PWM inputs) from the Arduino

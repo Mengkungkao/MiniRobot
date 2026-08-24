@@ -3,9 +3,9 @@
      transverse axis, plus a passive caster for the third contact point.
      The LiDAR points along the caster end, so THAT end is the robot's front
      and +x runs towards it: the caster leads and the drive axle trails. The
-     Arduino uses the opposite convention (its "forward" is the axle end);
-     serial_bridge's reverse_base_direction parameter is what reconciles the
-     two, and must stay in step with the signs below.
+     Arduino uses the same convention (WHEEL_Y_SIGN and the sign constants in
+     MiniRobotGeometry.h), so nothing rotates anything on the way across the
+     serial link and this file simply describes the robot as it is.
      Dimensions are nominal; the ones that actually matter to the software are
      'track' (must match TRACK_WIDTH_MM in the sketch) and 'wheel_radius'
      (must match WHEEL_DIAMETER_MM / 2). -->
@@ -50,7 +50,10 @@
   </link>
 
   <!-- Wheel joint names must match the /joint_states the serial bridge
-       publishes: left_wheel_joint, right_wheel_joint. -->
+       publishes. The bridge maps motor number to joint name with its
+       wheel_joint_names parameter (base.yaml), which is where the fact that
+       motor 1 drives the -y wheel and motor 2 the +y one is written down on
+       the ROS side. -->
   <xacro:macro name="wheel" params="name y">
     <link name="${name}_wheel_link">
       <visual><origin rpy="1.5708 0 0"/><geometry><cylinder radius="${wheel_radius}" length="${wheel_width}"/></geometry><material name="wheel"/></visual>
@@ -87,10 +90,16 @@
   </link>
   <joint name="laser_joint" type="fixed"><parent link="base_link"/><child link="laser"/><origin xyz="${caster_x} 0 ${laser_height - wheel_radius}" rpy="0 0 0"/></joint>
 
-  <!-- MPU9250/9255/6500. Frame of the /imu/data message. The chip is mounted
-       facing the axle end, which is now the rear, so imu_link is yawed 180 deg
-       from base_link. The bridge republishes the Arduino's IMU fields
-       unchanged; this joint is what tells TF which way they point. -->
+  <!-- MPU9250/9255/6500. Frame of the /imu/data message. The chip is bolted
+       down facing the axle end, which is the rear, so imu_link really is yawed
+       180 deg from base_link and this joint says so. That is a fact about the
+       hardware, not a correction: the firmware publishes accelerometer and
+       gyro readings in the chip's own axes and TF rotates them, which is what
+       frames are for.
+       Yaw is the exception and needs no rotation anywhere: a 180 deg yaw
+       leaves the z axis alone, so a counter-clockwise turn is counter-
+       clockwise in both frames. That is why odometry heading can come straight
+       from this chip while +x points the other way. -->
   <link name="imu_link"/>
   <joint name="imu_joint" type="fixed"><parent link="base_link"/><child link="imu_link"/><origin xyz="0 0 ${base_height}" rpy="0 0 ${pi}"/></joint>
 </robot>

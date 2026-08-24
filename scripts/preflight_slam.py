@@ -47,9 +47,12 @@ from tf2_ros import Buffer, TransformListener
 PASS, WARN, FAIL, SKIP = "PASS", "WARN", "FAIL", "SKIP"
 SEVERITY = {SKIP: 0, PASS: 1, WARN: 2, FAIL: 3}
 
-# Wheel order as the base reports it: 1 = LEFT, 2 = RIGHT, matching the
-# firmware's arrays and the /joint_states name list.
-WHEEL = ("LEFT", "RIGHT")
+# Wheel order as the base reports it: motor 1 (TB6612 channel A) first, motor 2
+# (channel B) second, matching the firmware's arrays and the order the serial
+# bridge fills /joint_states in. A motor number names a channel, never a side;
+# the bridge's wheel_joint_names parameter is what attaches a number to a side,
+# and this script reads it so a fault can be reported both ways.
+WHEEL = ("motor 1", "motor 2")
 WHEEL_RADIUS_M = 0.0235                 # 47 mm diameter
 RAD_S_TO_MM_S = WHEEL_RADIUS_M * 1000.0
 STANDARD_GRAVITY = 9.80665
@@ -60,8 +63,9 @@ EXPECTED_LINKS = {"base_footprint", "base_link", "left_wheel_link",
                   "right_wheel_link", "caster_link", "imu_link", "laser"}
 EXPECTED_JOINTS = {"base_footprint_joint", "left_wheel_joint",
                    "right_wheel_joint", "caster_joint", "imu_joint", "laser_joint"}
-# Joints the base actually reports, which must be a subset of the URDF's.
-DRIVEN_JOINTS = ["left_wheel_joint", "right_wheel_joint"]
+# Joints the base actually reports, which must be a subset of the URDF's. The
+# order they arrive in is motor order, not this order, so compare as a set.
+DRIVEN_JOINTS = {"left_wheel_joint", "right_wheel_joint"}
 
 # Expected publish rates. Lower bounds, generous enough not to fire on jitter.
 # /diagnostics is published at 1 Hz, so the floor has to tolerate a single
@@ -155,6 +159,10 @@ class Preflight(Node):
         # the bridge derives from it is then missing as a consequence, and
         # saying so once beats repeating it on every downstream check.
         self.base_mute = False
+        # Set from /diagnostics in phase 1 when the base found no IMU and is
+        # integrating heading from the wheels instead. Several checks below are
+        # meaningless in that state and say so rather than passing or failing.
+        self.no_imu = False
         # (wheel index, speed mm/s) of the first sample past the guard, and a
         # rolling window of recent wheel speeds for context.
         self.runaway_event: tuple[int, float] | None = None
@@ -217,32 +225,33 @@ class Preflight(Node):
             return [float("nan"), float("nan")]
         return [v * RAD_S_TO_MM_S for v in msg.velocity[:2]]
 
-    def bridge_reverse_base(self, timeout: float = 2.0) -> bool | None:
-        """Ask the serial bridge whether it is flipping the base frame.
+    def bridge_wheel_joint_names(self, timeout: float = 2.0) -> list[str] | None:
+        """Ask the serial bridge which URDF joint each motor drives.
 
-        Wheel labels in this report are ROS ones -- 'left' is the wheel on the
-        base frame's +y side. Config.h and validate_motor_control.py number
-        motors in the Arduino's frame, and when the bridge is reversing, the
-        two disagree: ROS left is Arduino motor 2. Naming the wrong motor sends
-        the operator to the wrong constants, so it is worth one service call.
-        Returns None if the bridge does not answer, in which case the report
-        says nothing about motor numbers rather than guessing."""
+        Faults here are found per motor -- the arrays in telemetry and in the
+        firmware are in motor order -- but an operator fixes them by looking at
+        a wheel. This is the one mapping between the two, and it lives in the
+        bridge's wheel_joint_names parameter (base.yaml), mirroring
+        WHEEL_Y_SIGN in the firmware. Returns None if the bridge does not
+        answer, in which case the report names motors only rather than
+        guessing at sides."""
         client = self.create_client(GetParameters,
                                     "/mini_serial_bridge/get_parameters")
         try:
             if not client.wait_for_service(timeout_sec=timeout):
                 return None
             future = client.call_async(
-                GetParameters.Request(names=["reverse_base_direction"]))
+                GetParameters.Request(names=["wheel_joint_names"]))
             end = time.monotonic() + timeout
             while rclpy.ok() and not future.done() and time.monotonic() < end:
                 rclpy.spin_once(self, timeout_sec=0.05)
             if not future.done():
                 return None
             values = future.result().values
-            if not values or values[0].type != ParameterType.PARAMETER_BOOL:
+            if not values or values[0].type != ParameterType.PARAMETER_STRING_ARRAY:
                 return None
-            return bool(values[0].bool_value)
+            names = list(values[0].string_array_value)
+            return names if len(names) == len(WHEEL) else None
         finally:
             self.destroy_client(client)
 
@@ -321,11 +330,12 @@ class Preflight(Node):
         self.stop()
         if not wheels:
             return None, None, None
-        left = sum(w[0] for w in wheels) / len(wheels)
-        right = sum(w[1] for w in wheels) / len(wheels)
+        # In motor order, matching WHEEL and every per-wheel array on the base.
+        motor_1 = sum(w[0] for w in wheels) / len(wheels)
+        motor_2 = sum(w[1] for w in wheels) / len(wheels)
         yaw = sum(yaw_rates) / len(yaw_rates) if yaw_rates else float("nan")
         vx = sum(odom_vx) / len(odom_vx) if odom_vx else float("nan")
-        return (left, right), yaw, vx
+        return (motor_1, motor_2), yaw, vx
 
 
 # -----------------------------------------------------------------------------
@@ -444,7 +454,27 @@ def phase_graph(node: Preflight, args) -> Phase:
     else:
         p.add("command watchdog", PASS, "fed")
     if "imu" in values:
-        p.add("IMU detected", PASS, values["imu"])
+        # heading_source is the bridge's own verdict and is what the sensor and
+        # rotation checks below key off, so read it here rather than inferring
+        # an absent IMU from zeroed readings.
+        source = values.get("heading_source", "")
+        if source == "encoders":
+            p.add("IMU detected", WARN,
+                  f"{values['imu']} -- heading is coming from the wheels",
+                  "The base found nothing on I2C, so odometry heading is the "
+                  "difference between the two wheel distances: it drifts on every "
+                  "slip and cannot see the robot being pushed. SLAM still works "
+                  "and the bridge widens the yaw covariance to say so. To chase "
+                  "it, send IMU over serial and read the I2C scan it prints -- "
+                  "EMPTY_BUS means power or SDA/SCL wiring, not the driver.")
+            node.no_imu = True
+        else:
+            p.add("IMU detected", PASS, values["imu"])
+    if values.get("stalled_motors", "none") not in ("none", ""):
+        p.add("stalled motors", FAIL, f"motor(s) {values['stalled_motors']}",
+              "A wheel is commanded to move and is not moving. The base boosts it "
+              "in bursts and rests it between; check for an obstruction, a jammed "
+              "gearbox or a flat battery before mapping.")
     return p
 
 
@@ -464,6 +494,15 @@ def phase_sensors(node: Preflight, args) -> Phase:
     if imu is None:
         p.add("IMU", SKIP if node.base_mute else FAIL,
               "no /imu/data" + (" (base is mute)" if node.base_mute else ""))
+    elif node.no_imu:
+        # There is no IMU fitted, so every field of this message is a zero the
+        # base invented -- which is exactly why the bridge stamps the
+        # covariances with -1. Checking those zeros against gravity would
+        # report a broken sensor instead of an absent one, and send whoever
+        # reads it to recalibrate a chip that is not there.
+        p.add("IMU readings", SKIP,
+              "no IMU fitted -- /imu/data carries zeros marked unavailable "
+              "(covariance -1); nothing to check against gravity")
     else:
         magnitude = math.sqrt(imu.linear_acceleration.x ** 2 +
                               imu.linear_acceleration.y ** 2 +
@@ -555,7 +594,7 @@ def phase_sensors(node: Preflight, args) -> Phase:
         p.add("joint states", SKIP if node.base_mute else FAIL,
               "no /joint_states" + (" (base is mute)" if node.base_mute else ""))
     else:
-        missing = [j for j in DRIVEN_JOINTS if j not in list(joints.name)]
+        missing = sorted(DRIVEN_JOINTS - set(joints.name))
         if missing:
             p.add("joint states", FAIL, f"missing {', '.join(missing)}",
                   "RViz will not animate the wheels and the URDF joint names "
@@ -722,14 +761,13 @@ def phase_motion(node: Preflight, args) -> Phase:
 
     # Resolved before anything spins, so the service call cannot interleave
     # with a drive test. None means the bridge did not answer and the report
-    # simply omits motor numbers.
-    reversed_base = node.bridge_reverse_base()
-    if reversed_base is None:
-        motor_of = {"left": "", "right": ""}
+    # names motors without saying which wheel that is.
+    joint_of_motor = node.bridge_wheel_joint_names()
+    if joint_of_motor is None:
+        wheel_of = {label: "" for label in WHEEL}
     else:
-        left_motor, right_motor = ("2", "1") if reversed_base else ("1", "2")
-        motor_of = {"left": f" (motor {left_motor})",
-                    "right": f" (motor {right_motor})"}
+        wheel_of = {WHEEL[i]: f" ({joint_of_motor[i].replace('_joint', '')})"
+                    for i in range(len(WHEEL))}
 
     speed = args.speed
     turn = args.turn
@@ -775,40 +813,54 @@ def phase_motion(node: Preflight, args) -> Phase:
         return p
 
     target = speed * 1000.0
-    left, right = wheels
-    moved = max(abs(left), abs(right)) > 5.0
-    drive_detail = f"commanded {target:+.0f} mm/s -> L {left:+.0f}  R {right:+.0f} mm/s"
+    m1, m2 = wheels
+    moved = max(abs(m1), abs(m2)) > 5.0
+    # Every check derived from the forward run needs the command to have
+    # reached the motors for the whole window, which the front stop gate can
+    # deny at any point in it.
+    forward_valid = moved and not blocked
+    drive_detail = f"commanded {target:+.0f} mm/s -> m1 {m1:+.0f}  m2 {m2:+.0f} mm/s"
 
-    if not moved and blocked:
+    if blocked:
         # One obstacle in front, not four broken things. Report it once and
         # skip everything downstream of a command that was never delivered.
-        p.add("command reaches the wheels", SKIP,
-              f"{drive_detail} -- front stop gate engaged, nothing was commanded")
+        #
+        # This skips whether or not the wheels moved. A gate that engages part
+        # way through the window is worse than one that blocks the whole of it:
+        # the wheels turn for a fraction of the run, the averages come out at a
+        # tenth of target in the forward direction and full speed in reverse,
+        # and 'wheel tracking' then reports a direction-dependent miss and
+        # sends the operator off to re-run a calibration that was never wrong.
+        # Any forward number measured through the gate is fiction.
+        detail = (f"{drive_detail} -- front stop gate engaged"
+                  + (", nothing was commanded" if not moved
+                     else " part of the time, so these numbers are not a measurement"))
+        p.add("command reaches the wheels", SKIP, detail)
         p.add("forward drive", SKIP,
-              "wheel direction, wheel match and odom twist all need a forward "
-              "command that reaches the motors; clear the front sector and "
-              "re-run to check them")
+              "wheel direction, wheel match, odom twist and wheel tracking all "
+              "need a forward command that reaches the motors for the whole "
+              "window; clear the front sector and re-run to check them")
     else:
         p.add("command reaches the wheels", PASS if moved else FAIL, drive_detail,
               "" if moved else
               "Nothing moved. Check the mux is passing (/cmd_vel_out), the "
               "watchdog is fed, and the e-stop is clear.")
 
-        for label, value in (("left", left), ("right", right)):
+        for label, value in zip(WHEEL, (m1, m2)):
             if value < -5.0:
-                p.add(f"{label} wheel direction", FAIL,
-                      f"{value:+.0f} mm/s on a forward command",
+                p.add(f"{label} direction", FAIL,
+                      f"{value:+.0f} mm/s on a forward command{wheel_of[label]}",
                       "This wheel measures backwards. Run "
                       "scripts/validate_motor_control.py --tests link,signs on the Pi.")
             elif abs(value) < 5.0:
-                p.add(f"{label} wheel direction", FAIL, "did not move")
+                p.add(f"{label} direction", FAIL, f"did not move{wheel_of[label]}")
             else:
-                p.add(f"{label} wheel direction", PASS, f"{value:+.0f} mm/s forward")
+                p.add(f"{label} direction", PASS, f"{value:+.0f} mm/s forward")
 
-    if moved and abs(left) > 5.0 and abs(right) > 5.0:
-        mismatch = abs(left - right)
-        mean = 0.5 * (abs(left) + abs(right))
-        detail = f"L {left:+.0f} vs R {right:+.0f} mm/s ({100*mismatch/mean:.0f}% apart)"
+    if forward_valid and abs(m1) > 5.0 and abs(m2) > 5.0:
+        mismatch = abs(m1 - m2)
+        mean = 0.5 * (abs(m1) + abs(m2))
+        detail = f"m1 {m1:+.0f} vs m2 {m2:+.0f} mm/s ({100*mismatch/mean:.0f}% apart)"
         if mismatch > 0.25 * mean:
             p.add("wheels matched", FAIL, detail,
                   "The robot will curve on a straight command and SLAM will fight "
@@ -824,8 +876,8 @@ def phase_motion(node: Preflight, args) -> Phase:
     # Odometry has to agree with what the wheels are doing, or the map drifts.
     # Only meaningful while the wheels are actually turning: 0 == 0 agrees
     # perfectly and proves nothing.
-    if moved and odom_vx is not None and not math.isnan(odom_vx):
-        expected = 0.5 * (left + right)
+    if forward_valid and odom_vx is not None and not math.isnan(odom_vx):
+        expected = 0.5 * (m1 + m2)
         close = abs(odom_vx - expected) < max(15.0, 0.25 * abs(expected))
         p.add("odom twist", PASS if close else WARN,
               f"/odom reports {odom_vx:+.0f} mm/s, wheels average {expected:+.0f} mm/s",
@@ -836,10 +888,10 @@ def phase_motion(node: Preflight, args) -> Phase:
     node.spin(1.0)
     wheels, _, _ = node.drive(-speed, 0.0, seconds=2.5, settle=1.2)
     if wheels is not None and not node.runaway:
-        left_r, right_r = wheels
-        ok = left_r < -5.0 and right_r < -5.0
+        m1_r, m2_r = wheels
+        ok = m1_r < -5.0 and m2_r < -5.0
         p.add("reverse", PASS if ok else FAIL,
-              f"L {left_r:+.0f}  R {right_r:+.0f} mm/s",
+              f"m1 {m1_r:+.0f}  m2 {m2_r:+.0f} mm/s",
               "" if ok else "A wheel does not reverse. Check its H-bridge "
                             "direction pins.")
 
@@ -852,11 +904,11 @@ def phase_motion(node: Preflight, args) -> Phase:
         # band it was measured over misses one of them by more than the other.
         # Comparing the two wheels against each other cannot tell these apart;
         # comparing each wheel against its own target in both directions can.
-        if moved:
-            ratios = {"left": (abs(left) / target, abs(left_r) / target),
-                      "right": (abs(right) / target, abs(right_r) / target)}
+        if forward_valid:
+            ratios = {WHEEL[0]: (abs(m1) / target, abs(m1_r) / target),
+                      WHEEL[1]: (abs(m2) / target, abs(m2_r) / target)}
             track_detail = ", ".join(
-                f"{label}{motor_of[label]} {100*fwd:.0f}%/{100*rev:.0f}% fwd/rev"
+                f"{label}{wheel_of[label]} {100*fwd:.0f}%/{100*rev:.0f}% fwd/rev"
                 for label, (fwd, rev) in ratios.items())
             worst = min(ratios, key=lambda k: min(ratios[k]))
             worst_fwd, worst_rev = ratios[worst]
@@ -864,7 +916,7 @@ def phase_motion(node: Preflight, args) -> Phase:
                 p.add("wheel tracking", PASS, track_detail)
             elif abs(worst_fwd - worst_rev) > 0.20:
                 p.add("wheel tracking", FAIL, track_detail,
-                      f"The {worst} wheel{motor_of[worst]} misses its target by "
+                      f"The {worst} wheel{wheel_of[worst]} misses its target by "
                       f"a different amount in each direction, so this is NOT an "
                       f"encoder scale error -- a wrong MEASURED_COUNTS_PER_REV "
                       f"would be wrong by the same factor both ways. It is the "
@@ -877,7 +929,7 @@ def phase_motion(node: Preflight, args) -> Phase:
                       f"numbering above does not change what you paste.")
             else:
                 p.add("wheel tracking", FAIL, track_detail,
-                      f"The {worst} wheel{motor_of[worst]} misses its target by "
+                      f"The {worst} wheel{wheel_of[worst]} misses its target by "
                       f"about the same factor in both directions, which is what "
                       f"a wrong MEASURED_COUNTS_PER_REV looks like: the loop "
                       f"closes correctly on an encoder that counts wrong. "
@@ -890,16 +942,34 @@ def phase_motion(node: Preflight, args) -> Phase:
     node.spin(1.0)
     wheels, yaw_rate, _ = node.drive(0.0, turn, seconds=3.0, settle=1.5)
     if wheels is not None and not node.runaway:
-        left_t, right_t = wheels
+        m1_t, m2_t = wheels
         expected_deg = math.degrees(turn)
+        # A counter-clockwise turn drives the -y wheel forward and the +y wheel
+        # back. WHEEL_Y_SIGN says motor 1 is the -y one, so that is the pattern
+        # expected here; swap the two and the robot spins the wrong way while
+        # every other check still passes.
+        pattern_ok = m1_t > 2.0 and m2_t < -2.0
         p.add("rotate: wheel pattern",
-              PASS if left_t < -2.0 and right_t > 2.0 else FAIL,
+              PASS if pattern_ok else FAIL,
               f"commanded +{expected_deg:.0f} deg/s (CCW) -> "
-              f"L {left_t:+.0f}  R {right_t:+.0f} mm/s",
-              "" if left_t < -2.0 and right_t > 2.0 else
-              "A CCW turn must drive the left wheel back and the right wheel "
-              "forward. Swapped wheels would put SLAM's rotation backwards.")
-        if not math.isnan(yaw_rate):
+              f"m1 {m1_t:+.0f}  m2 {m2_t:+.0f} mm/s",
+              "" if pattern_ok else
+              "A CCW turn must drive motor 1 (the -y wheel) forward and motor 2 "
+              "(the +y wheel) back. If it is the other way round, WHEEL_Y_SIGN in "
+              "MiniRobotGeometry.h has the two motors on the wrong sides.")
+        if node.no_imu:
+            # Without an IMU the yaw rate on /odom is computed from the
+            # difference between the two wheel distances -- the same wheels
+            # this command just drove. It will agree with the command whatever
+            # the chassis does, including on blocks where the chassis does
+            # nothing at all, so treating it as corroboration would be
+            # circular. The wheel pattern above is the real check; the sign of
+            # the actual rotation needs an eye or a gyro.
+            p.add("rotate: yaw agrees", SKIP,
+                  "no IMU: /odom yaw comes from these same wheels, so it cannot "
+                  "corroborate them. Confirm the direction by eye on the floor, "
+                  "or fit the IMU.")
+        elif not math.isnan(yaw_rate):
             # This script insists the robot is ON BLOCKS, and a robot on blocks
             # does not turn: the wheels spin in the air and the gyro sees only
             # its own bias. The sign of a near-zero reading is noise, so calling

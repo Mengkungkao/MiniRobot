@@ -23,8 +23,9 @@
 
   Firmware layout (Arduino IDE/arduino-cli compile every .cpp/.h in this
   folder as one sketch, no separate library and no sketchbook setting needed):
-    MiniRobotPins.h       pin map and wheel indexing        } shared, kept
-    MiniRobotGeometry.h   wheel size, counts/rev, signs     } byte-identical
+    MiniRobotPins.h       pin map and motor indexing        } shared, kept
+    MiniRobotGeometry.h   wheel size, counts/rev, body       } byte-identical
+                            layout, commissioning signs      }
     MiniRobotMotors.h/.cpp  TB6612FNG channels, 31 kHz PWM  } with
     MiniRobotEncoders.h/.cpp  quadrature ISRs, atomic reads } the calibration
                                                            } sketch's copies
@@ -37,10 +38,14 @@
     Telemetry.h/.cpp   the 20 Hz 'T,...' telemetry line
     arduino_mini_base_controller.ino  setup()/loop() only
 
-  ROS coordinate convention:
-  - +X forward
-  - +Y left
+  ROS coordinate convention (REP-103), shared with the Pi:
+  - +X forward, and FORWARD IS THE LiDAR END
+  - +Y to port
   - +yaw counter-clockwise
+
+  The firmware used to call the opposite end forward and let the Pi rotate
+  every x/y quantity by 180 degrees on the way past. It does not any more:
+  one frame, defined once, in MiniRobotGeometry.h.
 
   Serial settings:
   - 500000 baud, 8-N-1
@@ -50,10 +55,10 @@
     VEL,<linear_mm_s>,<angular_deg_s>
 
   Test aliases and maintenance commands:
-    FORWARD,<speed_mm_s>
+    FORWARD,<speed_mm_s>          drive towards the LiDAR end
     REVERSE,<speed_mm_s>
-    LEFT,<angular_deg_s>
-    RIGHT,<angular_deg_s>
+    LEFT,<angular_deg_s>          turn counter-clockwise in place
+    RIGHT,<angular_deg_s>         turn clockwise in place
     STOP
     ESTOP
     CLEAR_ESTOP
@@ -68,20 +73,27 @@
     SWEEP,<motor_1_to_2>,<pwm_step_1_to_50>,<dwell_ms_min_100>[,R]
     PING
 
-  Motor numbering: 1 = LEFT (TB6612 channel A), 2 = RIGHT (channel B).
+  Motor numbering: 1 = TB6612 channel A, 2 = channel B. That is all a motor
+  number means -- which side of the robot each one drives is stated once, in
+  WHEEL_Y_SIGN (MiniRobotGeometry.h), and nowhere else.
 
   Wheel speed loops are fractional-order PID (PI^lambda D^mu). lambda/mu
   default to 1.0 (classic PID) when omitted from PID/PIDM.
 
-  Telemetry at 20 Hz (22 comma-separated fields):
+  Telemetry at 20 Hz (23 comma-separated fields):
     T,time_ms,x_mm,y_mm,yaw_deg,vx_mm_s,wz_deg_s,
-      tick_left,tick_right,
-      speed_left,speed_right,
-      pwm_left,pwm_right,
+      tick_m1,tick_m2,
+      speed_m1,speed_m2,
+      pwm_m1,pwm_m2,
       roll_deg,pitch_deg,
       gx_deg_s,gy_deg_s,
       ax_g,ay_g,az_g,
-      estop,watchdog
+      estop,watchdog,status
+
+  yaw_deg/wz_deg_s are the heading the pose was integrated along: the IMU's
+  when one is fitted, encoder-derived when one is not. 'status' is a bitmask:
+  bit0 motor 1 stalled, bit1 motor 2 stalled, bit2 IMU present, bit3
+  magnetometer fusion on.
 
   Calibration output from SWEEP (ignored by the ROS bridge):
     C,<motor>,<F|R>,<pwm>,<measured_mm_s>
@@ -89,22 +101,22 @@
   WIRING
   ------------------------------------------------------------
   TB6612FNG            Uno
-    PWMA (left)        D10
-    AIN1 (left)        D5
-    AIN2 (left)        D4
-    PWMB (right)       D9
-    BIN1 (right)       D7
-    BIN2 (right)       D8
+    PWMA (motor 1)     D10
+    AIN1 (motor 1)     D5
+    AIN2 (motor 1)     D4
+    PWMB (motor 2)     D9
+    BIN1 (motor 2)     D7
+    BIN2 (motor 2)     D8
     STBY               D12
     VM                 motor battery +
     VCC                5V
     GND                GND (common with battery ground)
 
   Encoders             Uno
-    Left  channel A    D2   (INT0)
-    Left  channel B    D6
-    Right channel A    D3   (INT1)
-    Right channel B    D11
+    Motor 1 channel A  D2   (INT0)
+    Motor 1 channel B  D6
+    Motor 2 channel A  D3   (INT1)
+    Motor 2 channel B  D11
 
   MPU9250/9255/6500    Uno
     VCC                3.3V or 5V, per your module
@@ -132,11 +144,21 @@ void setup() {
 
   delay(IMU_STARTUP_SETTLE_MS);
   if (!imuBegin()) {
-    // Without a heading source the robot must not drive: odometry would
-    // integrate every movement along a heading stuck at zero, so the map and
-    // Nav2 would both be wrong in a way that is hard to see from the outside.
+    // No IMU. The robot still has a heading source -- the difference between
+    // the two wheel distances -- so it drives, maps and navigates on encoder
+    // odometry alone, drifting faster wherever a wheel can slip. Telemetry
+    // says so in every line (status bit 2 clear) rather than leaving a host to
+    // wonder why yaw looks noisy.
+    //
+    // Set REQUIRE_IMU (Config.h) to make this fatal again: a latched e-stop
+    // and a robot that will not move without its gyro.
     Serial.println(F("ERR,NO_IMU_DETECTED"));
-    emergencyStopLatched = true;
+    if (REQUIRE_IMU) {
+      Serial.println(F("ERR,IMU_REQUIRED,ESTOP_LATCHED"));
+      emergencyStopLatched = true;
+    } else {
+      Serial.println(F("INFO,HEADING_SOURCE,ENCODERS"));
+    }
   }
 
   releaseAllMotors();
