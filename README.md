@@ -43,11 +43,16 @@ Raspberry Pi 4B running Ubuntu Server + ROS2 Humble
 Arduino Uno
   TB6612FNG dual H-bridge, ~31 kHz PWM
   Two quadrature encoders
-  MPU9250 / MPU9255 / MPU6500, Mahony fusion (auto-detected)
-  Two independent wheel-speed PID loops
+  MPU9250 / MPU9255 / MPU6500, Mahony fusion (auto-detected, optional)
+  Two independent wheel-speed PID loops, with breakaway and stall handling
   500 ms communication watchdog
   Latched emergency stop
 ```
+
+Every box below the workstation is optional and the rest keeps working without
+it: the LiDAR, the mux, the Arduino, the IMU, `robot_state_publisher`. What each
+one costs you when it is gone, and how the stack tells you, is in
+[Running with parts switched off or missing](#running-with-parts-switched-off-or-missing).
 
 SSH is used to open a terminal and manage the Raspberry Pi. ROS2 topics are
 transported directly by DDS across the network; they are not carried inside
@@ -73,36 +78,94 @@ Odometry follows ROS conventions:
 
 ### Which end is the front
 
-The **caster end is the front**: the COIN-D6 sits above the caster with its own
-zero mark pointing that way, so `base_link +X`, LiDAR angle zero and "drive
-forward" all agree. The drive axle trails.
+**The LiDAR end is the front.** The COIN-D6 sits above the caster with its own
+zero mark pointing that way, so `base_link +X`, LiDAR angle zero, "drive
+forward", a positive `cmd_vel.linear.x` and the Arduino's positive `VEL` all
+mean the same physical direction. The drive axle trails.
 
-The Arduino does not share that convention. Its odometry and `VEL` command use
-the opposite sense — for the firmware, "forward" is towards the axle end — and
-nothing in the sketch needs to change for this. The whole 180-degree rotation
-lives in one place on the Pi, `reverse_base_direction` in `config/base.yaml`:
+The Arduino shares that convention. Nothing rotates anything on the way across
+the serial link: velocity commands, odometry, wheel speeds and yaw all cross
+unmodified, and the bridge is a unit converter. The firmware used to call the
+axle end forward and the Pi rotated every `x`/`y` quantity by 180 degrees to
+compensate (`reverse_base_direction`); that parameter is gone, and so is the
+whole class of "which frame is this number in" bug that came with it.
 
-| where | what it does when reversed |
+The body layout is now one line of firmware, in `MiniRobotGeometry.h`:
+
+```cpp
+const int8_t WHEEL_Y_SIGN[MOTOR_COUNT] = {-1, +1};
+```
+
+That is the wheel's position along `+Y` in units of half the track, which is
+exactly what differential-drive kinematics wants:
+
+```text
+wheel speed = v - WHEEL_Y_SIGN[i] * omega * TRACK_WIDTH_MM/2
+```
+
+### Motors are numbered, not sided
+
+A motor number names a TB6612 channel and nothing else:
+
+| | channel | pins | position |
+| --- | --- | --- | --- |
+| motor 1 | A | `PWMA`/`AIN1`/`AIN2`, encoder on `D2`/`D6` | `-Y` side (starboard) |
+| motor 2 | B | `PWMB`/`BIN1`/`BIN2`, encoder on `D3`/`D11` | `+Y` side (port) |
+
+The side column is **measured, not chosen** — see
+[Wheel direction](#wheel-direction) for how, and for why the obvious way of
+measuring it is the wrong one.
+
+No motor is called "left" or "right" anywhere in the firmware, the bridge, the
+calibration sketches or the validation scripts. This is not cosmetic. The
+robot's front has already been redefined once; the wiring did not change with
+it, so any channel named after a side was going to end up lying. Faults are
+reported by motor number (`m1`/`m2`), which is what a wiring diagram and a
+`PIDM` command both use.
+
+Two lines map a number to a side, and they must agree with each other:
+
+| where | what it says |
 | --- | --- |
-| `serial_bridge.py` | negates `linear.x` on the way out, and odometry `x`/`y`, `vx` plus the wheel pair (swapped and negated) on the way in |
-| `urdf/mini_robot.urdf.xacro` | `caster_x`/`body_x` positive so the caster and laser sit at `+X`; `imu_joint` yawed by `pi` because the chip still faces the axle end |
+| `MiniRobotGeometry.h` → `WHEEL_Y_SIGN` | motor 1 is at `-Y`, motor 2 at `+Y` — used by the drive kinematics and the encoder heading |
+| `config/base.yaml` → `wheel_joint_names` | motor 1 drives `right_wheel_joint`, motor 2 `left_wheel_joint` — used by `/joint_states` only |
+
+Send `CFG` to the board and it prints its own copy as `ysign=-1/1`;
+`scripts/validate_motor_control.py` compares that against the source and stops
+if the board is running something else.
+
+Turning is still described as left and right — `LEFT`/`RIGHT` serial commands,
+teleop keys, "turn left" — because that is a direction of motion and it means
+the same thing whichever wheel does it.
+
+### Which files describe the body
+
+Change these together or the map and the robot will disagree:
+
+| where | what it fixes |
+| --- | --- |
+| `MiniRobotGeometry.h` | `WHEEL_Y_SIGN`, plus `ENCODER_SIGN` / `MOTOR_DIRECTION_SIGN`, which define what "forward" means to each wheel |
+| `config/base.yaml` | `wheel_joint_names`, the motor-number-to-joint mapping |
+| `urdf/mini_robot.urdf.xacro` | `caster_x`/`body_x` positive so the caster and laser sit at `+X`; `imu_joint` yawed by `pi` because the chip physically faces the axle end |
 | `config/nav2_params.yaml` | costmap footprint reaches further ahead of the axle than behind it |
 
-Yaw and angular velocity are never touched — rotation about Z is unchanged by a
-180-degree yaw rotation, so a left turn is a left turn whichever end leads.
-These four files describe one physical decision; change them together or the
-map and the robot will disagree.
+Yaw needs no rotation anywhere. Rotation about `Z` is unchanged by a 180-degree
+yaw rotation, so a left turn is a left turn whichever end leads — which is why
+the IMU can stay bolted down facing the rear and still supply the heading
+odometry integrates along.
 
 ## 3. Folder structure
 
 ```text
 arduino_mini_base_controller/          the firmware to upload to the Arduino Uno
   arduino_mini_base_controller.ino     setup()/loop() and the protocol reference
-  MiniRobotPins.h                      pin map and wheel indexing        \
-  MiniRobotGeometry.h                  wheel size, counts/rev, signs      | shared
-  MiniRobotMotors.h/.cpp               TB6612FNG channels, 31 kHz PWM     | layer
+  MiniRobotPins.h                      pin map and motor indexing        \
+  MiniRobotGeometry.h                  wheel size, counts/rev, body       | shared
+                                         layout, commissioning signs      | layer
+  MiniRobotMotors.h/.cpp               TB6612FNG channels, 31 kHz PWM     |
   MiniRobotEncoders.h/.cpp             quadrature ISRs, atomic reads     /
-  Config.h                             timing, drive limits, feed-forward fit
+  Config.h                             timing, drive limits, feed-forward fit,
+                                         low-speed torque constants
   Types.h                              WheelPID (fractional-order PID)
   Imu.h/.cpp                           MPU/AK8963 driver + Mahony fusion
   MotorControl.h/.cpp                  kinematics, PID loop, odometry, watchdog
@@ -112,7 +175,9 @@ arduino_mini_base_controller/          the firmware to upload to the Arduino Uno
 arduino_mini_motor_calibration/        bench sketch: measures and fits the
   arduino_mini_motor_calibration.ino    feed-forward motor constants (section 7)
   MiniRobot*.h/.cpp                    byte-identical copies of the six
-                                         shared-layer files above
+                                         shared-layer files above; keep them
+                                         that way with
+                                         scripts/sync_shared_sketch_files.sh
   Config.h                             baud, fit thresholds, CPR, DIR and
                                          sweep settings
   Counts.h/.cpp                        the session counts-per-rev, CPR, ROT
@@ -122,12 +187,18 @@ arduino_mini_motor_calibration/        bench sketch: measures and fits the
   Sweep.h/.cpp                         the PWM sweep and CAL
   Commands.h/.cpp                      serial command set, CONFIG, HELP
   README.md                            full reference for that sketch
-  Calibration_results.md               log of a past CAL run
+  cal_result.md                        analysed report of the CAL run the FF_*
+                                         constants in Config.h came from
+  cal_raw.log                          that run's raw serial log, kept so the
+                                         fit can be re-derived or re-plotted
+                                         without re-running the robot
 arduino_mini_imu_calibration/          bench sketch: measures the IMU constants
   arduino_mini_imu_calibration.ino      the firmware cannot measure itself
                                          (section 6)
-  MiniRobot{Pins,Geometry,Motors}      four of the six shared-layer files; the
-                                         encoders are not used here
+  MiniRobot*.h/.cpp                    the same six shared-layer files; the
+                                         encoders are unused here but shipped
+                                         anyway, because one copy set is easier
+                                         to keep honest than a per-sketch subset
   Config.h                             sample counts, thresholds, limits
   Stats.h                              Welford streaming mean/variance
   ImuDriver.h/.cpp                     detection, register setup, scaled reads
@@ -172,6 +243,23 @@ scripts/
                                         robot.launch.py on or off (section 11)
   robot_bringup.sh                    what that systemd unit runs; sources ROS
                                         and waits for the serial ports
+  build_arduino.sh                    compile a sketch for the Uno with the
+                                        IDE's toolchain and report flash/RAM
+  flash_arduino.py                    upload a .hex to the Uno over its
+                                        bootloader, from the Pi, with only
+                                        pyserial (section 8)
+  sync_shared_sketch_files.sh         copy or --check the six MiniRobot* files
+                                        across all three sketch folders
+  run_motor_calibration.py            drive a full CAL run and log every
+                                        sample to a file (section 7)
+  analyse_motor_calibration.py        turn a raw CAL log into cal_result.md:
+                                        every sample kept, refitted off-board,
+                                        residuals, hysteresis and the
+                                        breakaway floor (section 7)
+  validate_motor_control.py           bench validation of the base controller
+                                        over serial, no ROS needed (section 19)
+  preflight_slam.py                   end-to-end check of the ROS chain before
+                                        mapping (section 16)
 ```
 
 ## 4. Wiring
@@ -180,12 +268,12 @@ scripts/
 
 | TB6612FNG | Arduino Uno | Notes |
 |-----------|-------------|-------|
-| `PWMA`    | `D10`       | left wheel speed  |
-| `AIN1`    | `D5`        | left wheel direction |
-| `AIN2`    | `D4`        | left wheel direction |
-| `PWMB`    | `D9`        | right wheel speed |
-| `BIN1`    | `D7`        | right wheel direction |
-| `BIN2`    | `D8`        | right wheel direction |
+| `PWMA`    | `D10`       | motor 1 speed  |
+| `AIN1`    | `D5`        | motor 1 direction |
+| `AIN2`    | `D4`        | motor 1 direction |
+| `PWMB`    | `D9`        | motor 2 speed |
+| `BIN1`    | `D7`        | motor 2 direction |
+| `BIN2`    | `D8`        | motor 2 direction |
 | `STBY`    | `D12`       | driver enable, held HIGH |
 | `VM`      | motor battery + | motor supply |
 | `VCC`     | `5V`        | logic supply |
@@ -200,8 +288,8 @@ untouched, so `millis()`/`micros()`/`delay()` behave normally.
 
 | Encoder | Channel A | Channel B |
 |---------|-----------|-----------|
-| Left    | `D2` (INT0) | `D6`    |
-| Right   | `D3` (INT1) | `D11`   |
+| Motor 1 | `D2` (INT0) | `D6`    |
+| Motor 2 | `D3` (INT1) | `D11`   |
 
 Only `D2`/`D3` are external-interrupt capable on the Uno, so channel A goes
 there and channel B is read inside the ISR to recover the direction. That is
@@ -217,8 +305,32 @@ x2 decoding: two counts per encoder cycle.
 | `SCL`             | `A5`  |
 
 The sketch auto-detects the chip by `WHO_AM_I` at I2C address `0x68` or `0x69`:
-`0x70` = MPU6500 (no magnetometer), `0x71` = MPU9250, `0x73` = MPU9255. Send
-`IMU` over serial (or read `/diagnostics`) to see what it found.
+`0x70` = MPU6500 (no magnetometer), `0x71` = MPU9250, `0x73` = MPU9255. It
+probes at 400 kHz and, if nothing answers, again at 100 kHz — long jumper leads
+degrade the edges enough that fast mode fails while standard mode works, and
+falling back to encoder-only heading because of cable capacitance would be a
+silly way to lose a gyro.
+
+Send `IMU` over serial (or read `/diagnostics`) to see what it found. When it
+finds nothing it also walks the whole bus and prints what it saw, because
+"NONE" covers three different faults:
+
+```text
+INFO,IMU,NONE
+INFO,I2C_SCAN,EMPTY_BUS
+INFO,WHO_AM_I,0x68=0xFF,0x69=0xFF
+```
+
+- `EMPTY_BUS` — nothing acknowledges anywhere. The module has no power, `SDA`
+  and `SCL` are swapped or not connected, or the module is dead. This is a
+  wiring fault, not a software one.
+- addresses listed but no MPU — something is on the bus that this driver does
+  not know. The `WHO_AM_I` line says what the two candidate addresses returned;
+  an MPU6050 answers `0x68` there and is *not* supported by this sketch.
+- nothing at `0x68`/`0x69` but other addresses present — the module is strapped
+  to an address nobody probes.
+
+A missing IMU is not fatal: see [Running without an IMU](#running-without-an-imu).
 
 ## 5. Arduino serial protocol
 
@@ -247,7 +359,10 @@ IMU
 PING
 ```
 
-Testing aliases are also supported:
+Testing aliases are also supported. `FORWARD`/`REVERSE` drive towards and away
+from the LiDAR end; `LEFT`/`RIGHT` rotate in place, counter-clockwise and
+clockwise. Each answers `ACK,<name>` or `ERR,ESTOP_LATCHED`, so a command
+swallowed by a latched e-stop does not look identical to one that worked:
 
 ```text
 FORWARD,100
@@ -256,25 +371,84 @@ LEFT,45
 RIGHT,45
 ```
 
-Arduino publishes one telemetry line at 20 Hz, 22 comma-separated fields:
+Arduino publishes one telemetry line at 20 Hz, 23 comma-separated fields:
 
 ```text
 T,time_ms,x_mm,y_mm,yaw_deg,vx_mm_s,wz_deg_s,
-  tick_left,tick_right,
-  speed_left,speed_right,
-  pwm_left,pwm_right,
+  tick_m1,tick_m2,
+  speed_m1,speed_m2,
+  pwm_m1,pwm_m2,
   roll_deg,pitch_deg,
   gx_deg_s,gy_deg_s,
   ax_g,ay_g,az_g,
-  estop,watchdog
+  estop,watchdog,status
 ```
 
-Motor numbering is `1` = left, `2` = right, everywhere in the protocol.
+Per-wheel fields are in motor order: motor 1 (TB6612 channel A) then motor 2
+(channel B). `yaw_deg`/`wz_deg_s` are the heading the pose was actually
+integrated along, which is the IMU's when one is fitted and the encoders' when
+one is not — so a host never has to guess which sensor a yaw came from.
+
+`status` is a bitmask:
+
+| bit | meaning |
+| --- | --- |
+| 0 | motor 1 is commanded to move and is not moving |
+| 1 | motor 2 is commanded to move and is not moving |
+| 2 | an IMU was detected (clear = heading comes from the encoders) |
+| 3 | magnetometer fusion is active |
+
+It was added after the original 22-field line. Both the ROS bridge and
+`scripts/validate_motor_control.py` accept 22 or 23 fields, so a board that has
+not been reflashed still works and simply reports no status.
+
+`CFG` prints the constants the board was actually compiled with, which is the
+only way to tell a fixed source tree from a fixed robot:
+
+```text
+INFO,CFG,counts=520.0/520.0,dia=47.00,track=200.0,maxlin=150.0,maxang=86.0,
+         maxwheel=150.0,maxpwm=210,enc=-1/1,mot=-1/-1,ysign=-1/1
+```
 
 ## 6. IMU behaviour and the magnetometer
 
 The sketch runs a Mahony AHRS filter over the accelerometer and gyro, and
 optionally the AK8963 magnetometer.
+
+### Running without an IMU
+
+A robot that refuses to move because a sensor is unplugged is a robot you
+cannot debug. The firmware used to latch an emergency stop when no MPU
+answered, on the reasoning that odometry integrated along a heading stuck at
+zero would be wrong in a way that is hard to see. The wrongness was real; the
+cure was worse.
+
+Now the wheels supply the heading instead. The two wheel distances differ by
+exactly the arc the body swept:
+
+```text
+d(yaw) = (distance at -Y - distance at +Y) / TRACK_WIDTH_MM
+```
+
+So with the IMU missing the robot still drives, still maps and still navigates.
+The heading drifts faster — every wheel slip is a heading error it cannot see,
+and it cannot notice the robot being shoved sideways — but SLAM's scan matcher
+corrects exactly that kind of drift, and it is told to expect more of it: the
+bridge publishes a yaw covariance of 0.15 instead of 0.03 when the heading came
+from the wheels, so slam_toolbox weights the scans over the odometry rather
+than fighting an over-confident prior.
+
+Nothing about the fallback is silent:
+
+| where | what it says |
+| --- | --- |
+| boot banner | `ERR,NO_IMU_DETECTED` then `INFO,HEADING_SOURCE,ENCODERS`, plus an I2C scan |
+| every telemetry line | `status` bit 2 clear |
+| `/diagnostics` | `heading_source: encoders` |
+| bridge log | one warning on the transition |
+| `/imu/data` | still published, but with `-1` as the leading covariance — the `sensor_msgs/Imu` way of saying "no estimate", so nothing downstream fuses the zeros as though the robot were level and still |
+
+To make a missing IMU fatal again, set `REQUIRE_IMU = true` in `Config.h`.
 
 **Magnetometer fusion is off by default.** On a robot this size the AK8963 sits
 centimetres from two brushed motors and a battery, so the field it measures
@@ -367,7 +541,8 @@ way the robot tried to roll, and derives both `MOTOR_DIRECTION_SIGN` and
 `ENCODER_SIGN` from your answer. Answer by watching the wheel, not the numbers:
 a wheel with **both** signs wrong reports a perfectly healthy positive speed
 while turning backwards, and no measurement the robot can make will catch it.
-Paste the `SIGN` block it prints into `MiniRobotGeometry.h` in both sketch
+Paste the `SIGN` block it prints into `MiniRobotGeometry.h`, then run
+`bash scripts/sync_shared_sketch_files.sh` to push it to all three sketch
 folders.
 
 Then send:
@@ -376,19 +551,55 @@ Then send:
 CAL
 ```
 
-It sweeps both wheels in both directions (two passes each, about two and a
-half minutes), fits the line on-board, and prints the four constant lines ready
-to paste over the `FF_SLOPE_*` / `FF_INTERCEPT_*` definitions in
-`arduino_mini_base_controller.ino`:
+It sweeps both wheels in both directions, two passes each, fits the line
+on-board, and prints the four constant lines ready to paste over the
+`FF_SLOPE_*` / `FF_INTERCEPT_*` definitions in
+`arduino_mini_base_controller/Config.h`:
 
 ```text
-const float FF_SLOPE_MM_S_PER_PWM_FWD[MOTOR_COUNT] = {1.8734f, 1.9102f};
-const float FF_INTERCEPT_MM_S_FWD[MOTOR_COUNT] = {-71.20f, -76.85f};
+const float FF_SLOPE_MM_S_PER_PWM_FWD[MOTOR_COUNT] = {6.4639f, 6.2343f};
+const float FF_INTERCEPT_MM_S_FWD[MOTOR_COUNT] = {-44.31f, -44.78f};
 ...
 ```
 
-Send `HELP` for the rest of the commands (`RANGE`/`STEP`/`DWELL`/`PASSES` to
-retune the sweep, `RESULT` to reprint the paste block). Any character aborts a running sweep.
+Widen and refine the sweep before running it, so the dead zone is captured and
+the operating band is densely sampled rather than skipped over:
+
+```text
+RANGE,4,72
+STEP,2
+DWELL,400,600
+PASSES,2
+CAL
+```
+
+That is 280 samples and about five minutes. Send `HELP` for the rest of the
+commands (`RESULT` reprints the paste block). **Any character aborts a running
+sweep**, so do not type while it works.
+
+#### Keep the samples
+
+The sketch cannot: 2 KB of SRAM does not hold 280 points, so everything except
+the fitted answer is gone as soon as the terminal scrolls. And a five-minute
+sweep that must not be typed into is an awkward thing to babysit by hand, so
+both halves are scripted:
+
+```bash
+python3 scripts/run_motor_calibration.py -o cal_raw.log
+python3 scripts/analyse_motor_calibration.py cal_raw.log \
+    -o arduino_mini_motor_calibration/cal_result.md
+```
+
+The first sends the settings above, runs `CAL`, and writes every line to the
+log. The second turns it into the report.
+
+That refits the points off-board as a cross-check on the on-board arithmetic,
+and adds what the sketch has no room to compute: residuals (is the line
+actually straight, or does r² just look good?), the gap between the ascending
+and descending passes (stiction and backlash), the measured breakaway per wheel
+with the `FF_BREAKAWAY_PWM` line ready to paste, and every sample as CSV for
+plotting. Both files are kept in the repo, so the fit can be re-derived without
+re-running the robot.
 
 The sketch stops there on purpose: it drives the motor channels, counts the
 encoder ticks per wheel turn, commissions the directions, and prints the curve. Checking the fit
@@ -449,47 +660,80 @@ The price of that is one shared hardware layer kept in three places:
 | `MiniRobotPins.h` | yes | yes | yes |
 | `MiniRobotGeometry.h` | yes | yes | yes |
 | `MiniRobotMotors.h/.cpp` | yes | yes | yes |
-| `MiniRobotEncoders.h/.cpp` | yes | yes | -- (unused) |
+| `MiniRobotEncoders.h/.cpp` | yes | yes | yes (unused there) |
 
 Every copy that exists **must stay byte-identical**. The motor calibration
 sketch reports mm/s scaled by `WHEEL_DIAMETER_MM` and `MEASURED_COUNTS_PER_REV`
 and the firmware consumes the fit scaled by the same constants, so a mismatch
 silently bakes a constant error into every speed the robot drives. After
-editing any copy, push it out and check:
+editing any copy, push it out:
 
 ```bash
-cp arduino_mini_base_controller/MiniRobot{Pins,Geometry}.h \
-   arduino_mini_base_controller/MiniRobotMotors.{h,cpp} \
-   arduino_mini_imu_calibration/
-cp arduino_mini_base_controller/MiniRobot*.h \
-   arduino_mini_base_controller/MiniRobot*.cpp \
-   arduino_mini_motor_calibration/
-
-for f in MiniRobotPins.h MiniRobotGeometry.h MiniRobotMotors.h \
-         MiniRobotMotors.cpp MiniRobotEncoders.h MiniRobotEncoders.cpp; do
-  for d in arduino_mini_motor_calibration arduino_mini_imu_calibration; do
-    [ -f "$d/$f" ] || continue
-    cmp -s "arduino_mini_base_controller/$f" "$d/$f" \
-      && echo "OK   $d/$f" || echo "DIFF $d/$f"
-  done
-done
+bash scripts/sync_shared_sketch_files.sh            # copy them out
+bash scripts/sync_shared_sketch_files.sh --check    # report drift, change nothing
 ```
+
+`--check` exits non-zero and prints a diff when anything has drifted, so it
+works as a pre-flight or a pre-commit hook. The base controller is the source of
+truth — it is the one that flies.
+
+### Building and flashing without the IDE
+
+The Arduino is wired to the Raspberry Pi, so reflashing it through the IDE means
+unplugging the robot and carrying it to another machine. Two scripts avoid that.
+
+On any machine that has ever run the Arduino IDE (it uses the toolchain already
+installed under `~/.arduino15`):
+
+```bash
+bash scripts/build_arduino.sh arduino_mini_base_controller
+bash scripts/build_arduino.sh --all
+```
+
+```text
+arduino_mini_base_controller           flash  30080 / 32256 (93%)   static RAM  1170 / 2048 (57%)
+  -> build/arduino_mini_base_controller/arduino_mini_base_controller.hex
+```
+
+The size report is the point of running it: the base controller is past 90% of
+the Uno's flash, so a change that looks small can be the one that does not fit,
+and the IDE only tells you after you have picked a board and a port.
+
+Then, on the Pi, with nothing installed beyond pyserial:
+
+```bash
+scp build/arduino_mini_base_controller/*.hex minirobot@<pi>:/tmp/base.hex
+ssh minirobot@<pi> 'python3 ~/MiniRobot/scripts/flash_arduino.py /tmp/base.hex'
+```
+
+```text
+base.hex: 30208 bytes (93% of the application section)
+bootloader on /dev/arduino_mini, signature 0x1E 0x95 0x0F (ATmega328P)
+wrote 234 pages
+verified
+done; the board is running the new sketch
+```
+
+It speaks STK500v1, which is what the Uno's Optiboot bootloader speaks, reads
+back every page it writes, and refuses any image that would reach into the
+bootloader — so a failed upload leaves a board that still takes uploads. Stop
+the ROS stack first; two processes cannot share the port.
 
 Verified build size on `arduino:avr:uno` (AVR core 1.8.8, avr-gcc 7.3.0, LTO on
 as the IDE defaults to):
 
 | Sketch | Flash (of 32256) | SRAM (of 2048) |
 | --- | --- | --- |
-| `arduino_mini_base_controller` | 27554 B (85%) | 1102 B (54%) |
-| `arduino_mini_motor_calibration` | 20756 B (64%) | 441 B (22%) |
-| `arduino_mini_imu_calibration` | 30326 B (94%) | 791 B (39%) |
+| `arduino_mini_base_controller` | 30080 B (93%) | 1170 B (57%) |
+| `arduino_mini_motor_calibration` | 20754 B (64%) | 441 B (21%) |
+| `arduino_mini_imu_calibration` | 30488 B (94%) | 803 B (39%) |
 
 Splitting the firmware into modules cost nothing in SRAM. Duplicating the shared
 layer per sketch costs nothing either: `const` file-scope data has internal
 linkage, so the compiler folds the scalars and drops whatever a sketch does not
 use.
 
-Flash is the tight resource. The base controller has about 4.7 KB spare -- room
+Flash is the tight resource. The base controller has about 2.2 KB spare -- room
 for small additions but not for another large subsystem; the cheapest savings
 are dropping the `SWEEP` command once the feed-forward fit is measured, and the
 nine-axis Mahony path if you never enable the magnetometer. The IMU calibration
@@ -499,10 +743,10 @@ extend it, `RAW` and `MOTORS` are the two commands nothing else depends on.
 Only one sketch is on the board at a time, so these do not compete -- but each
 must fit on its own.
 
-If no IMU is detected at boot the sketch latches the emergency stop and reports
-`ERR,NO_IMU_DETECTED`. That is deliberate: without a heading source, odometry
-would integrate every movement along a heading stuck at zero, and both the map
-and Nav2 would be wrong in a way that is hard to see from the outside.
+If no IMU is detected at boot the sketch reports `ERR,NO_IMU_DETECTED`, prints
+an I2C scan, and carries on with the heading integrated from the wheels — see
+[Running without an IMU](#running-without-an-imu). Set `REQUIRE_IMU = true` in
+`Config.h` to make it latch the emergency stop instead.
 
 ## 9. Install ROS2 on the Raspberry Pi
 
@@ -631,6 +875,46 @@ ros2 topic echo /imu/data
 ros2 topic echo /scan
 ros2 run tf2_tools view_frames
 ```
+
+### Running with parts switched off or missing
+
+Every component can be left out, and the rest keeps working. A node that is off
+is simply never started — there is no stub, no zero-publisher and nothing
+pretending the hardware is there.
+
+```bash
+ros2 launch mini_robot robot.launch.py lidar:=false
+ros2 launch mini_robot robot.launch.py mux:=false
+ros2 launch mini_robot robot.launch.py base:=false
+ros2 launch mini_robot robot.launch.py description:=false
+ros2 launch mini_robot robot.launch.py lidar:=false mux:=false   # they compose
+```
+
+| switched off | what still works | what stops | how you find out |
+| --- | --- | --- | --- |
+| **LiDAR** (`lidar:=false`, or unplugged) | driving, teleop, odometry, TF | mapping, Nav2, the front stop gate | mux logs `no usable /scan — front stop gate is OFF and forward motion is UNPROTECTED` |
+| **mux** (`mux:=false`) | driving — the bridge subscribes to `/cmd_vel` directly | source arbitration and the front stop gate; whatever publishes `/cmd_vel` drives the base unmediated | the bridge logs the topic it is on at startup |
+| **base** (`base:=false`, or the Arduino unplugged) | LiDAR, TF, everything perception-side | all motion, odometry, IMU | bridge absent, or `Serial port disconnected` in `/diagnostics` |
+| **IMU** (unplugged or faulty) | everything — heading comes from the wheels | absolute attitude; heading drifts faster | `heading_source: encoders`, see [Running without an IMU](#running-without-an-imu) |
+| **magnetometer** | everything — six-axis fusion is the default anyway | nothing | `MAG_ABSENT` in `INFO,IMU` |
+| **`robot_state_publisher`** (`description:=false`) | driving, LiDAR, odometry | TF, so RViz, SLAM and Nav2 | no `/tf_static`, no robot in RViz |
+| **an encoder** | the other wheel | closed-loop control of that wheel: it stalls, boosts, and cools down in a loop | `ERR,STALL,MOTOR_<n>`, `status` bit set, `stalled_motors` in `/diagnostics` |
+| **desktop (RViz/SLAM/Nav2)** | the whole robot side, teleop included | mapping and autonomous navigation | nothing publishes `/cmd_vel` |
+
+Two switches are worth knowing about:
+
+- **`require_scan`** in `config/base.yaml` decides what the mux does with no
+  usable `/scan`. `false` (the default) passes forward commands through
+  unprotected; `true` blocks them until scans return. `false` is the default
+  because "the robot does not move and nothing says why" is the worse failure
+  on a bench.
+- **`REQUIRE_IMU`** in `Config.h` decides whether a missing IMU is fatal.
+  `false` (the default) falls back to encoder heading; `true` latches an
+  emergency stop.
+
+`bash scripts/verify_robot_stack.sh` reports a missing node as
+`not present (fine if that part of the stack isn't launched right now)` rather
+than as a failure, so it is still useful with parts switched off.
 
 ### Optional: start it automatically at boot
 
@@ -807,7 +1091,7 @@ ros2 service call /base/zero_yaw std_srvs/srv/Trigger {}
 ros2 service call /base/calibrate_imu std_srvs/srv/Trigger {}
 ```
 
-## 15. Motor PID behaviour
+## 15. Motor PID behaviour and low-speed torque
 
 For straight motion, both wheels receive the same speed setpoint. Each wheel
 has its own PID state and PWM output. This is intentional: equal speed does not
@@ -817,27 +1101,153 @@ loading differ between the two sides.
 Starting gains are:
 
 ```text
-Kp = 0.30
-Ki = 0.020
-Kd = 0.0030
+Kp = 0.35
+Ki = 0.60
+Kd = 0.0015
 ```
 
 Change both wheels at runtime:
 
 ```text
-PID,0.30,0.020,0.003
+PID,0.35,0.60,0.0015
 ```
 
-Change one wheel, where the motor number is 1 (left) or 2 (right):
+Change one wheel, by motor number:
 
 ```text
-PIDM,2,0.28,0.020,0.003
+PIDM,2,0.33,0.60,0.0015
 ```
 
 The loops are fractional-order PID (PI^lambda D^mu). `lambda`/`mu` default to
 `1.0`, which is exactly classic PID and takes a fast path that skips the
 Grünwald–Letnikov shaping entirely. Both can be passed as optional 4th and 5th
 arguments to `PID`/`PIDM` if you want to experiment.
+
+### Torque at low speed
+
+Slow is the hard case for a brushed gearmotor on a PWM bridge with no current
+sensing. Drive it at a low duty and it turns slowly *and* weakly, so the first
+sticky patch, rug edge or cable stops it — which is no use for a robot that has
+to approach a goal at 50 mm/s.
+
+Four things address it, and they are separate because they fix separate
+problems. All four live in the "Low speed" block of
+`arduino_mini_base_controller/Config.h`.
+
+**1. The loop could not see the speed it was controlling.** One encoder count
+is `pi * 47 / 520 = 0.284 mm`. At 30 mm/s that is 1.06 counts per 10 ms control
+period, so a speed measured over one period alternates between 0 and 28.4 mm/s.
+A PID cannot hold a speed it cannot see, and the zero samples look exactly like
+a stall, so the integrator winds up and the wheel surges.
+
+The measurement window now closes when a count actually arrives rather than on
+a fixed schedule (`SPEED_WINDOW_MAX_MS`, capped at 120 ms so a genuinely
+stopped wheel is still reported stopped promptly). At speed nothing changes —
+counts arrive every tick — and at 20 mm/s the estimate becomes a measurement
+instead of a coin flip.
+
+**2. The integrator had no authority.** `Ki` was `0.020`. With a plant of
+6.4 mm/s per PWM count that is an integral loop gain of 0.13/s: an eight-second
+time constant, correcting a stalled wheel at roughly 0.4 PWM per second. The
+loop was not weak, it was slow enough to look weak. `Ki = 0.60` gives a 0.26 s
+time constant, and `MAX_INTEGRAL_PWM` rose from 80 to 120 so the correction has
+somewhere to go — 120 PWM on top of a feed-forward of ~20 is most of the
+bridge, which is the point. A robot that can only apply the torque its
+calibration fit predicts cannot climb over a cable.
+
+**3. The bottom of the PWM range is a dead zone the fit does not describe.**
+Extrapolating the feed-forward line to zero speed says breakaway is at PWM
+6.9–7.6, but the calibration sweep measured a hard stall right up to PWM 8 and
+the wheels actually starting at PWM 10, 12 and 14 depending on wheel and
+direction (`arduino_mini_motor_calibration/cal_result.md`). Anything commanded
+into that gap energises the bridge and produces heat.
+
+`FF_BREAKAWAY_PWM` is a floor on the output of a wheel that is **commanded and
+not turning**. Deliberately not a floor on the feed-forward: a wheel already
+rolling coasts through speeds far below its breakaway, and flooring it there
+would turn every slow turn into a series of lurches.
+
+Read it off the **ascending** leg of a sweep. Coming back down, a turning wheel
+keeps turning at PWM values it could never have started from — motor 2 was
+still running at PWM 10 on the way down and needed 14 to start on the way up —
+and a wheel commanded from rest is always on the ascending side.
+`scripts/analyse_motor_calibration.py` derives it and prints the line ready to
+paste. On this robot the two wheels genuinely differ, `{10, 14}`, which is the
+argument against one shared floor: at 14 the easier wheel lurches on every
+start, at 10 the stiffer one sits dead until the stall boost rescues it.
+
+**4. A wheel loaded to a standstill needs more than any fit predicts.** While a
+wheel is commanded to move and is not moving, an extra PWM term ramps in on top
+of feed-forward and PID at `STALL_BOOST_RATE_PWM_S` (400 PWM/s) up to
+`STALL_BOOST_MAX_PWM`. It is deliberately fast — stiction breaks or it does not
+— and it collapses the moment the wheel turns, so breaking free does not also
+mean lurching.
+
+That boost is budgeted, because a stalled brushed motor on a bridge with no
+current limit is a heater. After `STALL_BOOST_MAX_MS` (1.5 s) of continuous
+stall the wheel coasts for `STALL_COOLDOWN_MS` (2 s), the integrator is dumped,
+and the board prints `ERR,STALL,MOTOR_<n>`. Then it tries again. A robot wedged
+against a wall pulses instead of cooking its gearbox, and the difference
+between "driving" and "trying to drive" is visible from ROS:
+
+```text
+[WARN] motor 2 STALLED: commanded to move and not moving. The base is
+       boosting it in bursts; check for an obstruction, a jammed gearbox
+       or a flat battery.
+```
+
+`/diagnostics` carries the same thing as `stalled_motors`, and telemetry
+`status` bits 0 and 1 are the raw signal.
+
+### What that is worth
+
+`python3 scripts/validate_motor_control.py --selftest` runs the firmware's
+control law against the plant measured in `cal_result.md`, with no hardware
+involved. Adding a friction step partway through a run — the model of a rug
+edge or a sticky patch, expressed as the extra PWM the wheel now needs — gives
+the numbers the retune was for. True wheel speed, at 0.05 s, 0.3 s, 0.6 s, 1 s
+and 1.9 s after the load appears:
+
+| commanded | drag | gains | recovery |
+| --- | --- | --- | --- |
+| 50 mm/s | +10 PWM | `Ki` 0.020 | 26 → 28 → 29 → 29 → **30 mm/s** |
+| 50 mm/s | +10 PWM | `Ki` 0.60 | 28 → 36 → 40 → 44 → **48 mm/s** |
+| 50 mm/s | +20 PWM | `Ki` 0.020 | 26 → 1 → **0 → 3 → 2 mm/s** (stalled, stick-slip) |
+| 50 mm/s | +20 PWM | `Ki` 0.60 | 26 → 22 → 30 → 37 → **46 mm/s** |
+| 100 mm/s | +15 PWM | `Ki` 0.020 | 66 → 68 → 68 → 69 → **70 mm/s** |
+| 100 mm/s | +15 PWM | `Ki` 0.60 | 68 → 79 → 86 → 91 → **97 mm/s** |
+
+The middle pair is the reported symptom exactly: at the old gains a modest load
+at a slow commanded speed does not slow the robot down, it leaves the wheel
+juddering between stopped and barely moving, and the loop corrects at about
+0.4 PWM per second, which never arrives. The real
+robot recovers faster still, because the model does not include the stall
+boost.
+
+Nothing is free: the step response overshoots by 2.7% at 150 mm/s and 5.5% at
+40 mm/s, and steady-state ripple is under 0.9 mm/s. If your robot is heavier or
+its gearboxes stiffer and you see hunting, lower `Ki` first — `PID,0.35,0.30,0.0015`
+at runtime, no reflash — and only then reach for `Kp`.
+
+### What this does not do
+
+There is no current sensing on this robot, so none of the above is real torque
+control — it is speed control given enough headroom to demand torque, plus a
+time budget so the demand cannot go on forever. If you want more:
+
+- **Lower the PWM frequency.** 31.4 kHz is easy on the ears and gentle on the
+  windings, but switching losses in the TB6612 rise with frequency, so a lower
+  carrier puts slightly more of the battery into the motor. Timer1 in
+  phase-correct mode with prescaler 1 gives 15.6 kHz. **This invalidates the
+  feed-forward calibration** — PWM frequency changes the torque produced at a
+  given duty — so re-run `CAL` afterwards.
+- **Slow-decay (brake-mode) PWM** holds current up through the off phase and is
+  the standard answer to weak low-speed torque. It needs the PWM on the
+  direction pins rather than the `PWM` pin, and on this board three of the four
+  direction pins (`D4`, `D7`, `D8`) have no timer output at all. It would need
+  rewiring, not a firmware change.
+- **A shunt and a current loop** is the real answer, and it is a hardware
+  project.
 
 ## 16. Mapping with RViz, SLAM and Nav2
 
@@ -873,11 +1283,12 @@ direction-dependent, because breakaway PWM differs per direction. Comparing the
 two wheels to each other cannot tell those apart; comparing each wheel to its
 own target in both directions can, and `wheel tracking` names which one it is.
 
-Wheel labels in the report are ROS ones — `left` is the wheel on the base
-frame's `+y` side. With `reverse_base_direction` on that is **Arduino motor
-2**, not motor 1, so the check queries the bridge and prints the motor number
-alongside the label. Re-running `CAL` fits both motors in both directions
-anyway, so the numbering matters for reading the report, not for the fix.
+Wheels are reported by motor number (`m1`, `m2`) because that is what the
+firmware arrays, the telemetry line and a `PIDM` command all use. The report
+also queries the bridge's `wheel_joint_names` and prints the wheel each number
+drives, so a fault found in the numbers can be traced to a wheel you can look
+at. Re-running `CAL` fits both motors in both directions anyway, so the
+numbering matters for reading the report, not for the fix.
 
 Two more results need reading in context:
 
@@ -1051,13 +1462,57 @@ So do not derive them from telemetry. Flash
 `arduino_mini_motor_calibration/` and send `DIR`: it spins each wheel at a
 fixed driver polarity with no signs applied, asks which way the robot tried to
 roll, and derives both signs from that one answer, then confirms them. Paste
-the `SIGN` block it prints into `MiniRobotGeometry.h` in **both** sketch
-folders — it is `const` and shared, so the copies must match.
+the `SIGN` block it prints into `MiniRobotGeometry.h`, then run
+`bash scripts/sync_shared_sketch_files.sh` — it is `const` and shared across all
+three sketch folders, so the copies must match.
 
 Telemetry is still the right check *afterwards*: command slow forward motion
 and confirm both wheel speeds read positive **and** that the top of both wheels
-moves toward the front of the robot. The second half is not optional; it is the
-half the robot cannot do for you.
+moves **toward the LiDAR end**. The second half is not optional; it is the half
+the robot cannot do for you.
+
+There is a third sign, and it is the one that cannot be caught this way at all:
+`WHEEL_Y_SIGN` says which side of the centre line each motor is on. Get it
+backwards and both wheels still drive forward correctly, both encoders still
+read positive, straight-line motion is perfect — and every turn goes the wrong
+way. The check is a single rotation command with the wheels off the ground:
+
+```text
+LEFT,30
+```
+
+A counter-clockwise turn must drive **motor 1 forward and motor 2 backward**
+(motor 1 is at `-Y`). `scripts/preflight_slam.py` checks exactly this as
+`rotate: wheel pattern`, and `scripts/validate_motor_control.py` compares the
+board's reported `ysign` against the source.
+
+But do **not** commission `WHEEL_Y_SIGN` by watching a rotation and judging
+which way the robot tried to spin. Clockwise and counter-clockwise are easy to
+call backwards, especially from behind a robot on blocks, and getting it wrong
+puts the two motors on the wrong sides — which reverses every turn while every
+straight-line check still passes.
+
+Spin **one wheel** and look at it instead. A velocity command whose differential
+term exactly cancels one wheel's target does that through the normal control
+path, no special firmware mode required:
+
+```text
+VEL,25.00,-14.32      motor 1 at +50 mm/s, motor 2 stationary
+VEL,25.00,14.32       motor 1 stationary, motor 2 at +50 mm/s
+```
+
+The zeroed wheel is below `MIN_WHEEL_SPEED_MM_S`, so it coasts and genuinely
+does not turn. 50 mm/s is about 20 rpm on a 47 mm wheel: slow enough to read at
+a glance. Stand behind the robot, look toward the LiDAR end, and note which
+wheel moves. On this robot, the first command turns the **right** wheel, so
+motor 1 is at `-Y`.
+
+The other shortcut that does not work: reversing which end is the front does
+**not** mean negating `ENCODER_SIGN` and `MOTOR_DIRECTION_SIGN`. Those are
+measured against whichever end `DIR` was told was the front, so once they are
+right they stay right — negating them "because the front moved" produces a robot
+that drives backwards under a positive command while every reading still looks
+healthy. Both mistakes have been made in this repo.
 
 ### IMU direction
 
@@ -1071,11 +1526,23 @@ const float IMU_YAW_SIGN = -1.0f;
 `nav_monitor` will also report `REVERSED ANGULAR` if commanded and measured
 rotation disagree in sign.
 
+With no IMU fitted this check still applies, but it tests something else: the
+heading then comes from the wheels, so a decreasing yaw on a left turn means
+`WHEEL_Y_SIGN` is backwards, not `IMU_YAW_SIGN`. Push the robot forward by hand
+instead of turning it, confirm `/odom` x increases, then turn it and check the
+sign of the yaw.
+
 ### Straight-line PID
 
 Drive 1 m at 0.10 m/s and compare both wheel-speed telemetry values. Increase
 `Kp` slightly if a wheel reacts too slowly. Increase `Ki` slowly if it remains
 below target. Keep `Kd` small because encoder speed is noisy.
+
+Then check it under load, which is the case the gains are actually for: drive
+across a rug edge, a carpet-to-floor transition or a taped-down cable at
+50 mm/s. The wheel should slow briefly and recover, not stop. If it stops and
+the board prints `ERR,STALL,MOTOR_<n>`, the boost budget ran out — see
+[Torque at low speed](#torque-at-low-speed) before reaching for the gains.
 
 ### Distance calibration
 
@@ -1085,8 +1552,10 @@ Measure actual travel over 1 m. Correct `WHEEL_DIAMETER_MM` or
 ### Track width
 
 Command an in-place 360-degree turn. Correct `TRACK_WIDTH_MM` if the
-encoder-derived turning behaviour does not match the physical robot. Heading
-published to ROS still comes from the IMU.
+encoder-derived turning behaviour does not match the physical robot. With an
+IMU fitted, the heading published to ROS comes from the IMU and `TRACK_WIDTH_MM`
+only affects the wheel speeds the kinematics asks for; without one it also sets
+the scale of the encoder heading, so it matters twice as much.
 
 ### LiDAR alignment
 
@@ -1094,9 +1563,12 @@ A wall directly in front — in front meaning the caster end, see section 2 —
 must appear at angle zero in `/scan`. Adjust the `laser_joint` yaw in the URDF
 if the scan is rotated in RViz.
 
-If the whole scan looks 180 degrees out, check `reverse_base_direction` before
-touching `laser_joint`: a scan that is exactly backwards usually means the
-LiDAR's zero and the driving direction disagree, not that the mount is off.
+If the whole scan looks exactly 180 degrees out, the LiDAR's zero and the
+driving direction disagree. Check which end the robot drives towards on a
+positive `linear.x` first — a `FORWARD,60` on the serial link, wheels off the
+ground, watching which way the tops of the wheels turn — because a mount that
+is 180 degrees off and a `MOTOR_DIRECTION_SIGN` pair that is inverted look
+identical in RViz and need opposite fixes.
 
 ## 20. Safety notes
 
@@ -1220,9 +1692,48 @@ If that works, DDS and the firewall are fine and the problem is upstream.
 
 ### Motors hum but do not turn
 
-PWM is below the motors' breakaway threshold. `nav_monitor` reports this as
-`WHEELS STALLED`. Either the feed-forward fit is still the shipped guess (see
-section 7) or the battery is low.
+The board should now say so itself: a wheel commanded to move and not moving
+raises its `status` bit, shows up as `stalled_motors` in `/diagnostics`, and
+after 1.5 s prints `ERR,STALL,MOTOR_<n>` and rests for 2 s before trying again.
+`nav_monitor` reports it as `WHEELS STALLED`.
+
+In order of likelihood:
+
+1. **Something is holding the wheel.** An obstruction, a jammed gearbox, a
+   cable wound into a wheel. Turn each wheel by hand with the power off.
+2. **The battery is low.** Stall current sags the motor rail, which drops
+   torque, which deepens the stall. Check it under load, not at rest.
+3. **The feed-forward fit does not match the robot.** Re-run `CAL` (section 7).
+   A fit measured on a different battery, surface or gearbox puts the whole
+   drive band at the wrong PWM.
+4. **`FF_BREAKAWAY_PWM` is too low for this robot.** It ships at `{10, 14}`,
+   measured as the first ascending `SWEEP` step that produced motion on each
+   wheel. A stiffer gearbox, a heavier robot or a colder day needs more. Re-run
+   the calibration rather than guessing — `scripts/analyse_motor_calibration.py`
+   prints the value — then re-check that slow turns are still smooth.
+
+If the wheels hum and nothing appears in telemetry at all, that is a different
+fault: the encoder is not counting, so the loop is blind. Check the encoder
+wiring before touching the PID.
+
+### A wheel runs away at full speed on a small command
+
+A sign fault, not a tuning one. `ENCODER_SIGN` inverted on one wheel makes the
+PID see an error roughly twice the target that never shrinks, so the integrator
+winds to its cap and the wheel pins at `MAX_DRIVE_PWM`. Run
+`python3 scripts/validate_motor_control.py --tests link,signs`, which reads the
+board's compiled-in constants first and refuses to advise if the board is
+running something other than the source on disk.
+
+### The robot drives fine but every turn goes the wrong way
+
+`WHEEL_Y_SIGN` in `MiniRobotGeometry.h` has the two motors on the wrong sides of
+the centre line. Nothing else catches this: both wheels drive forward correctly,
+both encoders read positive, straight-line motion is perfect. See
+[Wheel direction](#wheel-direction).
+
+If turns are correct but the *map* rotates the wrong way, that is
+`IMU_YAW_SIGN` instead.
 
 ## License
 

@@ -104,7 +104,7 @@ hand, and press Enter:
 
 ```text
 INFO,CPR_START,MOTORS_ARE_OFF,THIS_IS_MEASURED_BY_HAND
-INFO,CPR_SPIN,MOTOR_1(LEFT),TURN_THIS_WHEEL_EXACTLY_5,FULL_TURNS_BY_HAND
+INFO,CPR_SPIN,MOTOR_1(CH_A),TURN_THIS_WHEEL_EXACTLY_5,FULL_TURNS_BY_HAND
 INFO,MARK_THE_TYRE_AND_THE_CHASSIS_SO_ONE_TURN_IS_UNAMBIGUOUS
 ASK,PRESS_ENTER_WHEN_DONE,X_THEN_ENTER_TO_ABORT
 CPR,LIVE,412,0
@@ -142,7 +142,7 @@ and watch the wheel:
 WARN,ROT_DRIVES_THE_MOTORS,ROBOT_ON_BLOCKS_WHEELS_SPINNING_FREE
 INFO,ROT,LINE_A_MARK_ON_EACH_TYRE_UP_WITH_A_MARK_ON_THE_CHASSIS
 ASK,PRESS_ENTER_WHEN_READY,X_THEN_ENTER_TO_ABORT
-INFO,ROT_RUN,MOTOR_1(LEFT),TURNS,1,TARGET_COUNTS,520
+INFO,ROT_RUN,MOTOR_1(CH_A),TURNS,1,TARGET_COUNTS,520
 ROT,1,TARGET,520,ACTUAL,526,STOP_ERROR,6,DEG,4.2
 ```
 
@@ -180,7 +180,7 @@ asks you which way the robot tried to roll:
 ```text
 INFO,DIR_START,ROBOT_ON_BLOCKS,BOTH_WHEELS_MUST_SPIN_FREE
 INFO,FORWARD_MEANS_THE_TOP_OF_THE_WHEEL_MOVES_TOWARD_THE_FRONT
-INFO,DIR_PROBE,MOTOR_1(LEFT),pwm=40,WATCH_THIS_WHEEL_NOW
+INFO,DIR_PROBE,MOTOR_1(CH_A),pwm=40,WATCH_THIS_WHEEL_NOW
 INFO,DIR_RAW_TICKS,-631
 ASK,WHICH_WAY_DID_THE_ROBOT_TRY_TO_ROLL,F=FORWARD,B=BACKWARD,X=ABORT
 ```
@@ -190,7 +190,7 @@ From that one answer it derives both signs at once and confirms them by driving
 the wheel forward through them:
 
 ```text
-INFO,DIR_SOLVED,MOTOR_1(LEFT),ENC,-1,MOT,1
+INFO,DIR_SOLVED,MOTOR_1(CH_A),ENC,-1,MOT,1
 DIR,1,F,90,352.18,OK
 ```
 
@@ -204,7 +204,7 @@ about two and a half minutes at the default settings. Points stream as they are
 measured:
 
 ```text
-INFO,SWEEP_START,MOTOR_1(LEFT),FORWARD
+INFO,SWEEP_START,MOTOR_1(CH_A),FORWARD
 C,1,F,30,0.00,STALL
 C,1,F,40,4.12,STALL
 C,1,F,50,21.90,USED
@@ -237,7 +237,7 @@ probably too hot.
 | Command | Effect |
 | --- | --- |
 | `CAL` | Calibrate both motors, both directions, then print the table and paste block. |
-| `CAL,<motor>` | Same for one motor (`1` = left, `2` = right). |
+| `CAL,<motor>` | Same for one motor (`1` = TB6612 channel A, `2` = channel B). |
 | `SWEEP,<motor>[,R]` | One motor, one direction. `R` = reverse. Fits and stores that one direction. |
 | `RESULT` | Reprint the fit table and the paste block. |
 | `CPR[,<turns>]` | Hand-spin measurement of encoder counts per wheel revolution, both wheels, motors off. Default 5 turns, max 20. Session-only; printed ready to paste. **Run this first.** |
@@ -276,7 +276,7 @@ re-upload.
 | `R,...` | `motor, F\|R, slope, intercept, r2, samples, deadzone_pwm, mm_s_at_max_pwm` |
 | `DIR,...` | `motor, F, pwm, mm_s, OK\|FAILED` — `DIR`'s post-commission self check |
 | `ASK,...` | waiting for an operator answer on the serial line |
-| `CPR,LIVE,...` | `left, right` — running raw totals while you turn a wheel |
+| `CPR,LIVE,...` | `motor 1, motor 2` — running raw totals while you turn a wheel |
 | `CPR,...` | `motor, TICKS, n, TURNS, n, COUNTS_PER_REV, n` — one wheel's result |
 | `ROT,...` | `motor, TARGET, n, ACTUAL, n, STOP_ERROR, n, DEG, n` |
 | `SIGN,...` | `motor, ENC, sign, MOT, sign` — one row per wheel |
@@ -313,7 +313,7 @@ R,1,F,1.8734,-71.20,0.9981,32,38.0,322.2
   check it against what the robot visibly does.
 
 What good looks like: r² ≥ 0.99, forward and reverse slopes within a few
-percent of each other on the same wheel, left and right within ~10%, dead zones
+percent of each other on the same wheel, the two wheels within ~10%, dead zones
 in the 30–50 PWM range for typical small gearmotors.
 
 The sketch also prints `INFO,SLOPE_MISMATCH_FORWARD,<pct>%` per direction. A
@@ -345,8 +345,8 @@ for a full `CAL`. `CONFIG` prints the estimate.
 | Message or symptom | Cause | Fix |
 | --- | --- | --- |
 | Nothing, or garbage characters | Terminal at the wrong baud | 500000, not 115200 |
-| `ERR,FIT_FAILED,MOTOR_n,used=0,...` + `CAUSE,NO_ENCODER_MOTION` | The wheel may be spinning, but the encoder netted zero counts. Most often channel **B** is floating or on the wrong pin — the ISR then reads a constant B and counts `+1, -1, +1, -1`, netting zero however fast the wheel turns. Also: flat battery, `STBY` low, channel A unplugged, wheel jammed | `CPR` catches it first: turn that wheel by hand and if the count stays near zero while the other column moves cleanly, it is the encoder wiring — left B = `D6`, right B = `D11`. `DIR` reports the same fault in two seconds |
-| `ERR,FIT_FAILED,MOTOR_n,...` + `CAUSE,WHEEL_MEASURED_BACKWARDS` | The signs were never commissioned. Normal on a differential drive, where the right motor is mounted mirrored | `DIR`, then `CAL`. Do not try to work out which sign to flip by hand — that is the mistake `DIR` exists to remove |
+| `ERR,FIT_FAILED,MOTOR_n,used=0,...` + `CAUSE,NO_ENCODER_MOTION` | The wheel may be spinning, but the encoder netted zero counts. Most often channel **B** is floating or on the wrong pin — the ISR then reads a constant B and counts `+1, -1, +1, -1`, netting zero however fast the wheel turns. Also: flat battery, `STBY` low, channel A unplugged, wheel jammed | `CPR` catches it first: turn that wheel by hand and if the count stays near zero while the other column moves cleanly, it is the encoder wiring — motor 1 B = `D6`, motor 2 B = `D11`. `DIR` reports the same fault in two seconds |
+| `ERR,FIT_FAILED,MOTOR_n,...` + `CAUSE,WHEEL_MEASURED_BACKWARDS` | The signs were never commissioned. Normal on a differential drive, where one motor is mounted mirrored | `DIR`, then `CAL`. Do not try to work out which sign to flip by hand — that is the mistake `DIR` exists to remove |
 | `ERR,FIT_FAILED,MOTOR_n,...` + `CAUSE,TOO_SLOW_OR_TOO_FEW_POINTS` | The wheel moved, but never above `MIN_VALID_SPEED_MM_S` | Charge the battery, check `STBY`, confirm the wheel spins free |
 | `WARN,SOME_POINTS_RAN_BACKWARDS,...` | Part of the sweep fitted and part ran backwards — one sign cannot describe a wheel that changed its mind. Usually a slipping coupling or an intermittent encoder channel | `DIR`, then look for the mechanical fault before trusting the fit |
 | `ERR,DIR_INCONSISTENT,...` | The two wheels were answered against different ends of the robot | Re-run `DIR` and answer both against the same front |
@@ -354,10 +354,10 @@ for a full `CAL`. `CONFIG` prints the estimate.
 | `ERR,TOO_FEW_STEPS,n,...` | `RANGE`/`STEP` leave fewer than four distinct PWM points | Widen `RANGE` or shrink `STEP` |
 | `ERR,FIT_REJECTED,NON_POSITIVE_SLOPE` | More PWM produced less speed — not a motor curve | Check for a slipping coupling, a failing driver channel, or a collapsing battery |
 | `WARN,LOW_R2,<r2>,...` | Noisy or non-linear measurement | Longer `DWELL`, charged battery, check for mechanical binding |
-| `WARN,WHEELS_DIFFER_A_LOT,...` | Left and right slopes differ by more than 25% | Look for drag on the slow wheel; re-check `MEASURED_COUNTS_PER_REV` per wheel |
+| `WARN,WHEELS_DIFFER_A_LOT,...` | The two motors' slopes differ by more than 25% | Look for drag on the slow wheel; re-check `MEASURED_COUNTS_PER_REV` per wheel |
 | `0.000f /*NOT_CALIBRATED*/` in the paste block | That wheel/direction has no valid fit — the preceding `WARN,MISSING_FIT` lines name which | Fix the cause the `ERR,FIT_FAILED` line reported, then re-run. **Never paste a block containing `0.000f`** — the firmware treats a non-positive slope as "no feed-forward" and falls back to pure PID, so that wheel will be visibly slow |
 | All speeds off by a constant factor | Wrong `MEASURED_COUNTS_PER_REV` | Re-measure with `CPR`, using more turns |
-| `ERR,CPR_NO_COUNTS,...` | The wheel turned but the encoder netted near zero, or it never turned | Channel B floating or miswired (left `D6`, right `D11`); if the *other* column moved instead, the two encoders are swapped |
+| `ERR,CPR_NO_COUNTS,...` | The wheel turned but the encoder netted near zero, or it never turned | Channel B floating or miswired (motor 1 `D6`, motor 2 `D11`); if the *other* column moved instead, the two encoders are swapped |
 | `WARN,CPR_CROSSTALK,...` | The other wheel counted too | Encoders cross-wired, or the wrong wheel was turned |
 | `WARN,WHEELS_SHOULD_MATCH,...` | The two wheels measured more than 5% apart | Same part, same gearbox — one count is wrong. Re-run `CPR` with more turns and stop precisely on the mark |
 | `ROT` stops short or overshoots the mark | `MEASURED_COUNTS_PER_REV` is too low / too high | Re-run `CPR` with more turns; use `ROT,5` to magnify what is left |
