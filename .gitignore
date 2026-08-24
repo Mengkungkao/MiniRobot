@@ -1,6 +1,11 @@
 __pycache__/
 *.pyc
 
+# Compiled sketches from scripts/build_arduino.sh: a .hex is a build product
+# of the sources next to it, and a stale one in the tree is a board flashed
+# with code nobody can read any more.
+build/
+
 # colcon workspace build artifacts (this repo only ships ros2_ws/src)
 ros2_ws/build/
 ros2_ws/install/
