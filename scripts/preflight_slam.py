@@ -83,6 +83,12 @@ FRONT_STOP_M = 0.30                     # cmd_mux front_stop_distance
 # Results
 # -----------------------------------------------------------------------------
 
+
+def planar_yaw(q) -> float:
+    """Yaw in radians from a quaternion, for a robot that only rotates about z."""
+    return math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                      1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+
 @dataclass
 class Check:
     name: str
@@ -529,6 +535,49 @@ def phase_sensors(node: Preflight, args) -> Phase:
                   "ros2 service call /base/calibrate_imu std_srvs/srv/Trigger {}")
         else:
             p.add("IMU gyro bias", PASS, f"{drift_deg:.2f} deg/s while still")
+
+        # The instantaneous rate above is dominated by noise and says almost
+        # nothing about the bias that actually matters. What twists a map is
+        # the *integral*: a residual so small it reads as zero on any single
+        # sample still turns into degrees over a mapping session. Measure the
+        # heading the robot navigates on, over a window long enough for a
+        # sub-0.01 deg/s bias to show up.
+        #
+        # The gyro is calibrated once at boot, when the chip has not warmed up.
+        # Re-running it after a few minutes powered has measured 11x lower
+        # drift on this robot, which is the difference between a map that
+        # closes and one that shears.
+        print("    measuring yaw drift at rest (8 s) -- do not touch the robot")
+        first_yaw, last_yaw = None, None
+        start = time.monotonic()
+        while rclpy.ok() and time.monotonic() - start < 8.0:
+            rclpy.spin_once(node, timeout_sec=0.05)
+            odom = node.odom.last
+            if odom is None:
+                continue
+            yaw = planar_yaw(odom.pose.pose.orientation)
+            if first_yaw is None:
+                first_yaw = yaw
+            last_yaw = yaw
+        if first_yaw is None or last_yaw is None:
+            p.add("yaw drift at rest", SKIP, "no odometry to measure")
+        else:
+            elapsed = max(1e-6, time.monotonic() - start)
+            rate = math.degrees(math.atan2(math.sin(last_yaw - first_yaw),
+                                           math.cos(last_yaw - first_yaw))) / elapsed
+            detail = f"{rate:+.4f} deg/s ({3600 * rate:+.0f} deg/hour)"
+            recalibrate = ("Keep the robot still and re-run the gyro calibration, "
+                           "which is worth doing once the board has been powered "
+                           "for a few minutes rather than relying on the one it "
+                           "did at boot:\n"
+                           "           ros2 service call /base/calibrate_imu "
+                           "std_srvs/srv/Trigger {}")
+            if abs(rate) > 0.05:
+                p.add("yaw drift at rest", FAIL, detail, recalibrate)
+            elif abs(rate) > 0.005:
+                p.add("yaw drift at rest", WARN, detail, recalibrate)
+            else:
+                p.add("yaw drift at rest", PASS, detail)
 
         q = imu.orientation
         norm = math.sqrt(q.w ** 2 + q.x ** 2 + q.y ** 2 + q.z ** 2)
