@@ -13,8 +13,21 @@ namespace mini_rviz_plugins
 {
 
 // Matches the serial bridge's clamps (max_linear_m_s / max_angular_rad_s).
+// These are the range ends -- what the base will accept -- so the operator is
+// never offered a speed the firmware would silently clamp.
 constexpr double kMaxLinear = 0.15;
 constexpr double kMaxAngular = 1.5;
+
+// What the boxes START at, which is a different question from what the base
+// tolerates. The COIN-D6 publishes one scan per revolution at 10 Hz, so a scan
+// taken while turning is smeared by (turn / 10) radians end to end. 0.6 rad/s
+// gives ~3.4 deg, which slam_toolbox absorbs. The turn box used to open at
+// 1.0 and could be wound to kMaxAngular (8.6 deg of smear), so the easiest
+// thing to do with the panel was ruin the map. Keep kDefaultTurn equal to
+// rotate_to_heading_angular_vel in mini_robot's nav2_params.yaml and to the
+// teleop_keyboard 'turn' default -- one budget, spent three ways.
+constexpr double kDefaultLinear = 0.10;
+constexpr double kDefaultTurn = 0.6;
 
 TeleopPanel::TeleopPanel(QWidget * parent)
 : rviz_common::Panel(parent)
@@ -34,12 +47,12 @@ TeleopPanel::TeleopPanel(QWidget * parent)
   speed_box_ = new QDoubleSpinBox(this);
   speed_box_->setRange(0.05, kMaxLinear);
   speed_box_->setSingleStep(0.05);
-  speed_box_->setValue(0.10);
+  speed_box_->setValue(kDefaultLinear);
   speed_box_->setSuffix(QStringLiteral(" m/s"));
   turn_box_ = new QDoubleSpinBox(this);
   turn_box_->setRange(0.2, kMaxAngular);
   turn_box_->setSingleStep(0.1);
-  turn_box_->setValue(1.0);
+  turn_box_->setValue(kDefaultTurn);
   turn_box_->setSuffix(QStringLiteral(" rad/s"));
 
   status_label_ = new QLabel(QStringLiteral("Teleop off — Nav2 has control"), this);

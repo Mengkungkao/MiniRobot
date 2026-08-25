@@ -304,7 +304,13 @@ behavior_server:
     transform_tolerance: 0.1
     use_sim_time: false
     simulate_ahead_time: 2.0
-    max_rotational_vel: 0.8
+    # Recovery spins smear scans exactly like any other rotation, and they
+    # happen when the robot is already lost -- the worst moment to hand
+    # slam_toolbox a smeared scan. Held at the same 0.6 rad/s budget as
+    # rotate_to_heading_angular_vel. The behavior server publishes straight
+    # to /cmd_vel and does NOT pass through velocity_smoother, so this line
+    # is the only thing capping a recovery spin.
+    max_rotational_vel: 0.6
     min_rotational_vel: 0.2
     rotational_acc_lim: 1.8
 
@@ -331,8 +337,12 @@ velocity_smoother:
     feedback: OPEN_LOOP
     # x must not exceed max_linear_m_s in base.yaml, or the smoother hands the
     # bridge commands it will only clamp again.
-    max_velocity: [0.15, 0.0, 1.2]
-    min_velocity: [-0.12, 0.0, -1.2]
+    # theta must not exceed the mapping smear budget either: at 10 Hz, one
+    # scan per revolution, 0.6 rad/s is ~3.4 deg of smear per scan. This
+    # sat at 1.2 (6.9 deg) where it never bound in normal driving and
+    # quietly allowed twice the budget whenever anything upstream asked.
+    max_velocity: [0.15, 0.0, 0.6]
+    min_velocity: [-0.12, 0.0, -0.6]
     max_accel: [0.35, 0.0, 1.8]
     max_decel: [-0.45, 0.0, -2.0]
     odom_topic: odom

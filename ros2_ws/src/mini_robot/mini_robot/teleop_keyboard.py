@@ -119,7 +119,15 @@ def main():
     # the bridge's clamp, so every keypress commanded the maximum the robot
     # would allow and there was no slower setting to pick.
     speed = node.declare_parameter('speed', 0.10, read_only_descriptor).value
-    turn = node.declare_parameter('turn', 1.0, read_only_descriptor).value
+    # 0.6 rad/s (34 deg/s) is the mapping smear budget, not a comfort setting.
+    # The COIN-D6 publishes one scan per revolution at 10 Hz, so a scan taken
+    # while turning is smeared by (turn / 10) radians end to end. At 0.6 that
+    # is ~3.4 deg, which slam_toolbox's scan matcher absorbs; this used to
+    # default to 1.0 (5.7 deg) and the RViz panel allowed 1.5 (8.6 deg), so
+    # driving by hand smeared every scan well past what Nav2 was tuned to
+    # produce. Keep this equal to rotate_to_heading_angular_vel in
+    # config/nav2_params.yaml -- they are the same budget spent two ways.
+    turn = node.declare_parameter('turn', 0.6, read_only_descriptor).value
     key_timeout = node.declare_parameter('key_timeout', 0.75, read_only_descriptor).value
 
     if not stamped and frame_id:
