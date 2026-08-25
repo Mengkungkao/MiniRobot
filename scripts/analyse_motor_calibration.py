@@ -203,7 +203,7 @@ def build_report(samples, board_fits, meta, signs, paste, elapsed, source_name):
     w("```bash")
     w("bash scripts/build_arduino.sh arduino_mini_motor_calibration")
     w("python3 scripts/flash_arduino.py build/arduino_mini_motor_calibration/*.hex")
-    w("# then over serial at 500000 baud:")
+    w("# then over serial at 115200 baud:")
     w("#   RANGE,4,72   STEP,2   DWELL,400,600   PASSES,2   CAL")
     w(f"python3 scripts/analyse_motor_calibration.py {source_name} -o cal_result.md")
     w("```")

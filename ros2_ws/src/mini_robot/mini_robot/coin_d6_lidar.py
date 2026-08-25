@@ -4,6 +4,7 @@ from __future__ import annotations
 import math, time
 from typing import Optional
 import rclpy
+from rclpy.duration import Duration
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 import serial
@@ -37,8 +38,26 @@ class CoinD6(Node):
         # maps angular bin index -> (distance, intensity, receive time);
         # 'last_try' rate-limits reconnect attempts.
         self.pub=self.create_publisher(LaserScan,'/scan',10); self.ser:Optional[serial.Serial]=None; self.buf=bytearray(); self.last_try=0.; self.points={}
-        # Fast timer (200 Hz) drains the serial port; slower timer publishes scans.
-        self.create_timer(0.005,self.read_timer); self.create_timer(1.0/max(1.0,float(self.get_parameter('publish_rate_hz').value)),self.publish)
+        # One scan per REVOLUTION, not one per timer tick.
+        #
+        # This used to publish on a 10 Hz timer and include any point up to
+        # 0.5 s old, stamped 'now'. The unit spins at ~10 Hz, so each "scan"
+        # blended up to five revolutions taken at five different robot poses and
+        # presented them as instantaneous (time_increment was 0.0). Standing
+        # still that is invisible; rotating at 40 deg/s it smears returns across
+        # ~20 degrees, which is exactly when a map tears.
+        #
+        # Now the packet stream itself decides: the device angle climbs to 360
+        # and wraps, and that wrap ends a revolution. Every bin the sensor
+        # actually sampled appears once, with the honest acquisition time.
+        self.rev_start=None      # monotonic time the current revolution began
+        self.last_angle=None     # previous packet's start angle, for wrap detection
+        self.last_publish=0.     # so the watchdog can tell if revolutions stopped
+        self.scan_time=1.0/max(1.0,float(self.get_parameter('publish_rate_hz').value))
+        # Fast timer drains the serial port. The slow one is only a watchdog:
+        # if wrap detection ever stops firing (garbage angles, a stalled motor)
+        # a scan still goes out rather than /scan silently going dead.
+        self.create_timer(0.005,self.read_timer); self.create_timer(0.5,self.watchdog)
 
     def connect(self):
         # Open the serial port if needed and command the sensor to start
@@ -82,6 +101,14 @@ class CoinD6(Node):
         # Sample angles are interpolated linearly between the packet's start
         # angle a0 and end angle a1 (unwrapped across the 0/360 boundary).
         n=p[3]; a0=angle_raw(u16(p[4],p[5])); a1=angle_raw(u16(p[6],p[7]));
+        # A large step BACKWARDS in start angle is the sensor passing 360 -> 0,
+        # i.e. the revolution just ended. Publish what was collected and begin
+        # the next one. The 180 degree threshold is deliberately loose: packets
+        # are a few degrees wide, so nothing but a wrap comes close to it.
+        if self.last_angle is not None and a0 < self.last_angle-180.0:
+            self.publish_revolution()
+        self.last_angle=a0
+        if self.rev_start is None: self.rev_start=time.monotonic()
         if a1<a0:a1+=360
         step=0 if n<=1 else (a1-a0)/(n-1)
         now=time.monotonic()
@@ -117,16 +144,45 @@ class CoinD6(Node):
             except:pass
             self.ser=None
 
-    def publish(self):
-        # Assemble a full-circle LaserScan from the binned points. Bins with no
-        # recent sample stay at +inf ("no return"); samples older than 0.5 s are
-        # treated as stale and excluded.
-        bins=int(round(2*math.pi/self.inc))+1; msg=LaserScan(); msg.header.stamp=self.get_clock().now().to_msg(); msg.header.frame_id=self.frame
-        msg.angle_min=-math.pi; msg.angle_max=math.pi; msg.angle_increment=self.inc; msg.scan_time=0.1; msg.time_increment=0.; msg.range_min=self.rmin; msg.range_max=self.rmax
-        msg.ranges=[float('inf')]*bins; msg.intensities=[0.0]*bins; now=time.monotonic()
-        for i,(d,q,t) in list(self.points.items()):
-            if now-t<0.5 and 0<=i<bins: msg.ranges[i]=d; msg.intensities[i]=q
+    def publish_revolution(self):
+        # Emit the revolution just completed and start a fresh one. Bins the
+        # sensor did not sample stay at +inf, which is the honest answer: a gap
+        # is better than a return copied from a previous revolution taken at a
+        # different robot pose.
+        now=time.monotonic()
+        if not self.points:
+            self.rev_start=now; return
+        elapsed=now-self.rev_start if self.rev_start else self.scan_time
+        # A plausible revolution only. A wrap missed because of dropped packets
+        # would otherwise report a 2 s "revolution" and mislabel every stamp.
+        if not (0.02 < elapsed < 1.0): elapsed=self.scan_time
+
+        bins=int(round(2*math.pi/self.inc))+1
+        msg=LaserScan(); msg.header.frame_id=self.frame
+        # LaserScan is stamped at the FIRST ray, with time_increment giving the
+        # offset of each one after it. That is what lets a consumer undo the
+        # robot's own motion across the sweep; 'now' plus time_increment 0 told
+        # it there was nothing to undo.
+        stamp=self.get_clock().now()-Duration(seconds=elapsed)
+        msg.header.stamp=stamp.to_msg()
+        msg.angle_min=-math.pi; msg.angle_max=math.pi; msg.angle_increment=self.inc
+        msg.scan_time=elapsed; msg.time_increment=elapsed/max(1,bins)
+        msg.range_min=self.rmin; msg.range_max=self.rmax
+        msg.ranges=[float('inf')]*bins; msg.intensities=[0.0]*bins
+        for i,(d,q,_t) in list(self.points.items()):
+            if 0<=i<bins: msg.ranges[i]=d; msg.intensities[i]=q
         self.pub.publish(msg)
+        self.points={}; self.rev_start=now; self.last_publish=now
+
+    def watchdog(self):
+        # Revolutions drive publishing; this only covers the case where they
+        # stop being detected while data is still arriving.
+        now=time.monotonic()
+        if self.points and now-self.last_publish>0.5:
+            self.get_logger().warning('no revolution boundary detected in 0.5 s - '
+                                      'publishing anyway; check the angle fields',
+                                      throttle_duration_sec=10.0)
+            self.publish_revolution()
 
     def destroy_node(self):
         # Best effort: tell the sensor to stop spinning before closing the port.

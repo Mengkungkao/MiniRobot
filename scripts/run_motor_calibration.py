@@ -37,7 +37,7 @@ def emit(line):
     log.write(line + "\n")
     print(line, flush=True)
 
-s = serial.Serial(PORT, 500000, timeout=0.2)
+s = serial.Serial(PORT, 115200, timeout=0.2)
 time.sleep(3.0)
 s.reset_input_buffer()
 

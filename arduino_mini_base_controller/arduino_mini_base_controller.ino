@@ -48,7 +48,7 @@
   one frame, defined once, in MiniRobotGeometry.h.
 
   Serial settings:
-  - 500000 baud, 8-N-1
+  - 115200 baud, 8-N-1
   - Commands are ASCII lines terminated by \n, \r or ':'
 
   Main command:

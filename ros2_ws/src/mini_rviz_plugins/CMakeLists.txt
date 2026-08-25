@@ -14,6 +14,7 @@ find_package(rclcpp_action REQUIRED)
 find_package(rviz_common REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(Qt5 REQUIRED COMPONENTS Widgets)
 
@@ -25,6 +26,8 @@ add_library(${PROJECT_NAME} SHARED
   src/goto_panel.hpp
   src/teleop_panel.cpp
   src/teleop_panel.hpp
+  src/reset_panel.cpp
+  src/reset_panel.hpp
 )
 ament_target_dependencies(${PROJECT_NAME}
   rclcpp
@@ -32,6 +35,7 @@ ament_target_dependencies(${PROJECT_NAME}
   rviz_common
   nav2_msgs
   geometry_msgs
+  std_srvs
   pluginlib
 )
 target_link_libraries(${PROJECT_NAME} Qt5::Widgets)

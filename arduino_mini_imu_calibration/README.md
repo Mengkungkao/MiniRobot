@@ -69,7 +69,7 @@ and D9/D7/D8, `STBY` on D12). Encoders are not used.
 ## 3. Procedure
 
 **1. Upload and connect.** Open the sketch in the Arduino IDE, select Arduino
-Uno, upload. Open a serial terminal at **115200 baud** (not the 500000 the ROS
+Uno, upload. Open a serial terminal at **115200 baud** (the same rate the ROS
 bridge uses — nothing here is parsed by ROS), line ending "Newline" or
 "Carriage return".
 
@@ -307,7 +307,7 @@ IMU is not something a sign flip can fix.
 
 | Message or symptom | Cause | Fix |
 | --- | --- | --- |
-| Nothing, or garbage characters | Terminal at the wrong baud | 115200, not 500000 |
+| Nothing, or garbage characters | Terminal at the wrong baud | 115200 |
 | `INFO,IMU,NONE` / `ERR,NO_IMU_FOUND` | Not answering at `0x68` or `0x69` | `SDA` → `A4`, `SCL` → `A5`, check the module's supply voltage and that `GND` is common |
 | `CHECK,READ_RATE_HZ` far below ~500 | I2C struggling | Shorter wires, and check the pull-ups on the module |
 | `CHECK,GRAVITY_G,...,BAD_SCALE_OR_MOVING` | Robot moving, or the accel range is not ±2 g | Hold it still; if it persists, `ImuDriver.cpp` and `Imu.cpp` disagree about `ACCEL_CONFIG` |

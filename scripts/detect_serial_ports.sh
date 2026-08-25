@@ -14,12 +14,11 @@ set -euo pipefail
 # ID_SERIAL, so nothing in the USB descriptors can tell them apart. The only
 # thing that can is what each one says on the wire, so that is what we check.
 #
-# The Arduino announces itself in ASCII ('READY,', 'T,', 'INFO,', ...) at either
-# 500000 baud (base controller and motor calibration) or 115200 (IMU
-# calibration). The
-# COIN-D6 emits 0xAA 0x55 framed binary packets at 230400 and free-runs without
-# being asked. Neither test writes anything by default, so the LiDAR motor is
-# never commanded to spin.
+# The Arduino announces itself in ASCII ('READY,', 'T,', 'INFO,', ...) at
+# 115200 baud -- all three sketches now share that rate, so there is only one
+# to probe. The COIN-D6 emits 0xAA 0x55 framed binary packets at 230400 and
+# free-runs without being asked. Neither test writes anything by default, so
+# the LiDAR motor is never commanded to spin.
 #
 # NOTE: opening a port toggles DTR, which resets an Arduino. Harmless on a
 # bench, but do not run this while the robot is driving.
@@ -112,21 +111,21 @@ def read_for(dev, baud, window, write=None):
         s.close()
 
 
+ARDUINO_BAUD = 115200
+
 for dev in sys.argv[1:]:
     role, detail = 'unknown', 'no recognisable traffic'
 
     # Arduino first: ASCII is unambiguous, so a hit here needs no tie-break.
-    for baud in (500000, 115200):
-        data, err = read_for(dev, baud, 3.5)
-        if err:
-            role, detail = 'error', err
-            break
-        if data and any(m in data for m in ARDUINO_MARKERS):
-            line = next((l for l in data.split(b'\n')
-                         if any(l.startswith(m) for m in ARDUINO_MARKERS)), b'')
-            role = 'arduino'
-            detail = f"{baud} baud, said {line.strip().decode('ascii', 'replace')[:58]!r}"
-            break
+    # One baud to try, now that every sketch runs at 115200.
+    data, err = read_for(dev, ARDUINO_BAUD, 3.5)
+    if err:
+        role, detail = 'error', err
+    elif data and any(m in data for m in ARDUINO_MARKERS):
+        line = next((l for l in data.split(b'\n')
+                     if any(l.startswith(m) for m in ARDUINO_MARKERS)), b'')
+        role = 'arduino'
+        detail = f"{ARDUINO_BAUD} baud, said {line.strip().decode('ascii', 'replace')[:58]!r}"
 
     if role == 'unknown':
         data, err = read_for(dev, 230400, 1.0)

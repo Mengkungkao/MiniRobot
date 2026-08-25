@@ -114,7 +114,7 @@ class SerialBridge(Node):
         # velocity limits clamp incoming commands before they reach the
         # Arduino; wheel geometry converts encoder ticks to joint states.
         self.declare_parameter('port', '/dev/ttyUSB1')
-        self.declare_parameter('baud', 500000)
+        self.declare_parameter('baud', 115200)
         self.declare_parameter('cmd_vel_topic', '/cmd_vel_out')
         self.declare_parameter('odom_topic', '/odom')
         self.declare_parameter('imu_topic', '/imu/data')

@@ -16,7 +16,7 @@
 // Timing
 // -----------------------------------------------------------------------------
 
-const uint32_t SERIAL_BAUD = 500000UL;
+const uint32_t SERIAL_BAUD = 115200UL;
 const uint16_t CONTROL_PERIOD_MS = 10;      // 100 Hz motor control
 const uint16_t TELEMETRY_PERIOD_MS = 50;    // 20 Hz telemetry
 const uint16_t COMMAND_WATCHDOG_MS = 500;   // stop if Pi heartbeat disappears

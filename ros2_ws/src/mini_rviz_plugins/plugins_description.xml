@@ -16,4 +16,14 @@
       control back to Nav2 through the cmd_mux.
     </description>
   </class>
+  <class name="mini_rviz_plugins/ResetPanel"
+         type="mini_rviz_plugins::ResetPanel"
+         base_class_type="rviz_common::Panel">
+    <description>
+      Put the base back to a known state: one Reset button for e-stop, clear
+      and zero-odometry, plus individual buttons for e-stop, clear e-stop,
+      reset odometry, zero yaw and calibrate IMU. Does not clear the SLAM map
+      (slam_toolbox has no reset service) and cannot see a duplicate stack.
+    </description>
+  </class>
 </library>

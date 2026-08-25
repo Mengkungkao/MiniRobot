@@ -27,6 +27,8 @@ Panels:
     Name: Goto
   - Class: mini_rviz_plugins/TeleopPanel
     Name: Teleop
+  - Class: mini_rviz_plugins/ResetPanel
+    Name: Reset
 Visualization Manager:
   Class: ""
   Displays:

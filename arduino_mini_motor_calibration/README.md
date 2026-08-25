@@ -76,7 +76,7 @@ connected or be left off.
 ## 3. Procedure
 
 **1. Upload and connect.** Open the sketch in the Arduino IDE, select Arduino
-Uno, upload. Open a serial terminal at **500000 baud** (the same rate the base
+Uno, upload. Open a serial terminal at **115200 baud** (the same rate the base
 controller uses, so one terminal profile covers both), line ending "Newline" or
 "Carriage return".
 
@@ -344,7 +344,7 @@ for a full `CAL`. `CONFIG` prints the estimate.
 
 | Message or symptom | Cause | Fix |
 | --- | --- | --- |
-| Nothing, or garbage characters | Terminal at the wrong baud | 500000, not 115200 |
+| Nothing, or garbage characters | Terminal at the wrong baud | 115200 |
 | `ERR,FIT_FAILED,MOTOR_n,used=0,...` + `CAUSE,NO_ENCODER_MOTION` | The wheel may be spinning, but the encoder netted zero counts. Most often channel **B** is floating or on the wrong pin — the ISR then reads a constant B and counts `+1, -1, +1, -1`, netting zero however fast the wheel turns. Also: flat battery, `STBY` low, channel A unplugged, wheel jammed | `CPR` catches it first: turn that wheel by hand and if the count stays near zero while the other column moves cleanly, it is the encoder wiring — motor 1 B = `D6`, motor 2 B = `D11`. `DIR` reports the same fault in two seconds |
 | `ERR,FIT_FAILED,MOTOR_n,...` + `CAUSE,WHEEL_MEASURED_BACKWARDS` | The signs were never commissioned. Normal on a differential drive, where one motor is mounted mirrored | `DIR`, then `CAL`. Do not try to work out which sign to flip by hand — that is the mistake `DIR` exists to remove |
 | `ERR,FIT_FAILED,MOTOR_n,...` + `CAUSE,TOO_SLOW_OR_TOO_FEW_POINTS` | The wheel moved, but never above `MIN_VALID_SPEED_MM_S` | Charge the battery, check `STBY`, confirm the wheel spins free |

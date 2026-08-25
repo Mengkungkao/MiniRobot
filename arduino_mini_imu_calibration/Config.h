@@ -10,7 +10,7 @@
 #include "MiniRobotGeometry.h"
 #include "MiniRobotPins.h"
 
-// A plain terminal baud rate, not the 500000 the ROS bridge uses. Nothing here
+// The same rate as the other two sketches and the ROS bridge. Nothing here
 // is parsed by ROS, and 115200 works in every serial monitor.
 const uint32_t SERIAL_BAUD = 115200UL;
 

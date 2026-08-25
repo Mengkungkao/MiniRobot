@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bench validation for the mini base controller's motor control chain.
 
-Speaks the Arduino serial protocol directly (500000 baud, ASCII lines), so it
+Speaks the Arduino serial protocol directly (115200 baud, ASCII lines), so it
 works whether or not the ROS 2 stack is running -- and it deliberately does NOT
 go through /cmd_vel, so a fault in the bridge or the mux cannot be mistaken for
 a fault in the firmware.
@@ -56,7 +56,7 @@ SKETCH_DIR = REPO_ROOT / "arduino_mini_base_controller"
 # identical on the wire.
 TELEMETRY_FIELD_COUNTS = (23, 22)
 DEFAULT_PORT = "/dev/arduino_mini"
-DEFAULT_BAUD = 500000
+DEFAULT_BAUD = 115200
 
 # The firmware stops the motors after COMMAND_WATCHDOG_MS without a VEL line,
 # so anything that drives has to keep a stream running underneath it.

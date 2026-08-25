@@ -1,7 +1,7 @@
 mini_serial_bridge:
   ros__parameters:
     port: /dev/arduino_mini
-    baud: 500000
+    baud: 115200
     # Normally the mux's output. With the mux switched off
     # (robot.launch.py mux:=false) the launch file points this straight at
     # /cmd_vel instead, so teleop and Nav2 still reach the base.

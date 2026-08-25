@@ -38,7 +38,7 @@ Raspberry Pi 4B running Ubuntu Server + ROS2 Humble
   serial bridge: /cmd_vel_out -> Arduino
   Arduino telemetry -> /odom, /imu/data, /joint_states and TF
             |
-            | USB serial, 500000 baud
+            | USB serial, 115200 baud
             v
 Arduino Uno
   TB6612FNG dual H-bridge, ~31 kHz PWM
@@ -213,7 +213,8 @@ arduino_mini_imu_calibration/          bench sketch: measures the IMU constants
   README.md                            full reference for that sketch
 ros2_ws/src/mini_robot/
   mini_robot/serial_bridge.py         Arduino <-> ROS2
-  mini_robot/coin_d6_lidar.py         COIN-D6 -> LaserScan
+  mini_robot/coin_d6_lidar.py         COIN-D6 -> LaserScan, one scan per
+                                        sensor revolution
   mini_robot/cmd_mux.py               teleop/manual/Nav2 priority and safety gate
   mini_robot/teleop_keyboard.py       WASD keyboard teleop
   mini_robot/nav_monitor.py           live health monitor for the whole chain
@@ -333,6 +334,23 @@ INFO,WHO_AM_I,0x68=0xFF,0x69=0xFF
 A missing IMU is not fatal: see [Running without an IMU](#running-without-an-imu).
 
 ## 5. Arduino serial protocol
+
+The link runs at **115200 baud, 8-N-1**, and all three sketches use that rate.
+
+It used to be 500000. The CH340 on this robot does not quite hold that: about
+one telemetry line in 600 arrived with a single flipped bit, `'-'` (`0x2D`)
+read as `'.'` (`0x2E`), turning `-4.19` into `.4.19`. The bridge rejects a line
+it cannot parse, so nothing downstream was ever fed a wrong number — but a rate
+the hardware cannot quite hold is not a rate worth keeping. Measured over three
+minutes of full-duplex traffic:
+
+| baud | corrupted lines |
+| --- | --- |
+| 500000 | ~0.17% (1 in 583) |
+| 115200 | **0 of 3571** |
+
+The link carries about 2.4 kB/s, so 115200 leaves nearly five times the
+headroom it needs.
 
 The Pi normally sends:
 
@@ -510,7 +528,7 @@ guess, not a calibration.**
 
 Upload `arduino_mini_motor_calibration/arduino_mini_motor_calibration.ino`,
 put the robot on blocks so both wheels spin free, open a serial terminal at
-500000 baud and send:
+115200 baud and send:
 
 ```text
 CPR
@@ -617,7 +635,7 @@ Full reference, including how to read the fit and what to do when it complains:
 
 The main sketch also has a built-in sweep, if you would rather fit the points
 yourself. With the wheels off the floor, connect a plain serial terminal at
-500000 baud (not the ROS stack) and run:
+115200 baud (not the ROS stack) and run:
 
 ```text
 SWEEP,1,10,1000
@@ -787,9 +805,9 @@ bash scripts/detect_serial_ports.sh --install
 
 It opens each `/dev/ttyUSB*` in turn and classifies it by what it transmits,
 because that is the only thing that separates two CH340s. The Arduino announces
-itself in ASCII (`READY,`, `INFO,`, `T,`) at 500000 baud, or 115200 if one of
-the calibration sketches is loaded; the COIN-D6 emits `0xAA 0x55` framed binary
-at 230400. It then writes `scripts/99-mini-robot.rules` matching each device on
+itself in ASCII (`READY,`, `INFO,`, `T,`) at 115200 baud, whichever of the three
+sketches is loaded; the COIN-D6 emits `0xAA 0x55` framed binary at 230400. It
+then writes `scripts/99-mini-robot.rules` matching each device on
 its `ID_PATH` — or on its USB serial number, if the adapter actually has one —
 installs it, reloads udev, and confirms both symlinks appeared.
 
@@ -1419,7 +1437,7 @@ One thing the bench tests will flag that predates them: the feed-forward fit in
 0.15 m/s the robot now drives at roughly PWM 14..31. The whole band is below the
 measured range, and the fit's claim that the wheels break away at PWM 5.4 is an
 extrapolation nothing has ever checked. Re-calibrate over the band that is
-actually used -- in `arduino_mini_motor_calibration/`, at 500000 baud:
+actually used -- in `arduino_mini_motor_calibration/`, at 115200 baud:
 
 ```text
 CPR
@@ -1556,6 +1574,31 @@ encoder-derived turning behaviour does not match the physical robot. With an
 IMU fitted, the heading published to ROS comes from the IMU and `TRACK_WIDTH_MM`
 only affects the wheel speeds the kinematics asks for; without one it also sets
 the scale of the encoder heading, so it matters twice as much.
+
+### One scan per revolution
+
+`coin_d6_lidar.py` publishes a `LaserScan` when the sensor completes a
+revolution, detected by the device angle wrapping past 360.
+
+It used to publish on a 10 Hz timer and include any point up to 0.5 s old,
+stamped `now` with `time_increment: 0.0`. The unit spins at ~10 Hz, so each
+"scan" blended up to **five revolutions**, taken at five different robot poses,
+and declared them instantaneous. Standing still that is invisible. Rotating at
+40 deg/s it smears returns across ~20 degrees — which is exactly when a map
+tears, and exactly the case that is hardest to diagnose from the outside.
+
+Now each scan holds one revolution, is stamped at its **first** ray (which is
+what `LaserScan` means), and carries a measured `scan_time` and a real
+`time_increment`, so a consumer can undo the robot's own motion across the
+sweep. Bins the sensor did not sample stay at `+inf`: a gap is safer than a
+return copied from a previous revolution taken somewhere else.
+
+Measured on this robot: 9.3 scans/s, 351 of 361 beams valid (versus 356 with
+the old stale-fill), `scan_time` 0.090–0.110 s tracking the real motor speed.
+Five beams of coverage is a cheap price for removing four revolutions of smear.
+
+A watchdog still publishes if no wrap is seen for 0.5 s, so garbage angle
+fields degrade to the old behaviour rather than silencing `/scan`.
 
 ### LiDAR alignment
 

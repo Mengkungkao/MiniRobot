@@ -10,11 +10,16 @@
 #include "MiniRobotGeometry.h"
 #include "MiniRobotPins.h"
 
-// The same baud the base controller uses, so one serial-monitor profile covers
-// both and a port probe does not have to guess. Nothing here is parsed by ROS.
-// The CH340 on this robot handles 500000 fine; drop to 115200 if a terminal
-// cannot open it. The IMU calibration sketch is still 115200.
-const uint32_t SERIAL_BAUD = 500000UL;
+// The same baud every sketch here uses, so one serial-monitor profile covers
+// all three and a port probe does not have to guess.
+//
+// 115200, not 500000. The CH340 on this robot does not quite hold 500000: the
+// base controller's telemetry showed roughly one line in 600 arriving with a
+// single flipped bit -- '-' (0x2D) read as '.' (0x2E), turning "-4.19" into
+// ".4.19". Rare enough to look like nothing, frequent enough to be a real
+// signal-integrity margin problem. The link carries about 2.4 kB/s, so 115200
+// still leaves nearly five times the headroom needed.
+const uint32_t SERIAL_BAUD = 115200UL;
 
 // -----------------------------------------------------------------------------
 // Fit acceptance

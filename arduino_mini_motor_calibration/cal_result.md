@@ -1,6 +1,6 @@
 # Motor calibration results
 
-Run on 2026-08-24 with the robot **on blocks**, both wheels
+Run on 2026-08-25 with the robot **on blocks**, both wheels
 free. Produced by `arduino_mini_motor_calibration` and written up by
 `scripts/analyse_motor_calibration.py`.
 
@@ -9,7 +9,7 @@ To reproduce:
 ```bash
 bash scripts/build_arduino.sh arduino_mini_motor_calibration
 python3 scripts/flash_arduino.py build/arduino_mini_motor_calibration/*.hex
-# then over serial at 500000 baud:
+# then over serial at 115200 baud:
 #   RANGE,4,72   STEP,2   DWELL,400,600   PASSES,2   CAL
 python3 scripts/analyse_motor_calibration.py cal_raw.log -o cal_result.md
 ```
