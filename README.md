@@ -994,15 +994,60 @@ Both the Pi and workstation must:
 
 - be on the same local network
 - use the same `ROS_DOMAIN_ID` (this project defaults to `31`)
+- use the same `RMW_IMPLEMENTATION` — see below, this one bites quietly
 - use `ROS_LOCALHOST_ONLY=0`
 - allow ROS2/DDS UDP traffic through the firewall
 
 On both machines:
 
 ```bash
-export ROS_DOMAIN_ID=31
-export ROS_LOCALHOST_ONLY=0
+source scripts/ros_network_env.sh
 ```
+
+### Both machines must use the same RMW
+
+Mixing Fast DDS and Cyclone DDS across the two machines **looks like it
+works**. Topics are plain RTPS and interoperate: `/scan`, `/odom` and `/tf` all
+run at full rate. Services do not — request/reply needs matching correlation.
+`wait_for_service()` returns true and then every call to `/base/*` times out.
+
+Measured on this robot, same call, same moment:
+
+| workstation RMW | topics | `ros2 service call /base/zero_yaw` |
+| --- | --- | --- |
+| `rmw_fastrtps_cpp` (matches the Pi) | ✅ | ✅ replies |
+| `rmw_cyclonedds_cpp` | ✅ | ❌ times out |
+
+Symptoms are the RViz Reset panel doing nothing, and `ros2 service call`
+hanging while `ros2 topic echo` is perfectly happy. `ros_network_env.sh` pins
+`rmw_fastrtps_cpp`, because it is the Humble default and the only RMW installed
+on the Pi.
+
+### Running more than one ROS project on the workstation
+
+If the workstation also runs another ROS project, do **not** export
+`ROS_DOMAIN_ID` or `RMW_IMPLEMENTATION` globally in `~/.bashrc`. Two projects
+that disagree cannot share a shell, and appending a block per project means the
+last one silently wins for some variables and not others — which is how this
+machine ended up with mDetect running on MiniRobot's domain while MiniRobot
+could not call a single service.
+
+Define one function per project instead, and pick one per terminal:
+
+```bash
+minirobot() {
+    source /opt/ros/humble/setup.bash
+    [ -f "$HOME/ros2_ws/install/setup.bash" ] && source "$HOME/ros2_ws/install/setup.bash"
+    export ROS_DOMAIN_ID=31
+    export ROS_LOCALHOST_ONLY=0
+    export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+    echo "MiniRobot: domain $ROS_DOMAIN_ID, $RMW_IMPLEMENTATION"
+}
+```
+
+Different domain *and* different RMW means the projects cannot see each other
+even by accident. A fresh terminal has neither set, so forgetting to choose
+fails loudly (no topics) instead of quietly (wrong project's topics).
 
 Test from the workstation:
 
